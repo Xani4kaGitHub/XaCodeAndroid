@@ -7,6 +7,7 @@ import com.xanichka.xacode.model.Conversation
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
+import com.xanichka.xacode.model.ProjectWorkspace
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -51,6 +52,22 @@ class LocalStore(context: Context) {
         }
         val requestedActive = preferences.getString("activeProfileId", profiles.first().id).orEmpty()
         val activeId = requestedActive.takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id
+        val legacyWorkspace = preferences.getString("workspaceUri", "").orEmpty()
+        val projects = runCatching {
+            val array = JSONArray(preferences.getString("projects", "[]"))
+            (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+                ProjectWorkspace(
+                    id = item.getString("id"),
+                    name = item.optString("name", "Проект"),
+                    treeUri = item.getString("treeUri"),
+                    createdAt = item.optLong("createdAt", System.currentTimeMillis())
+                )
+            }
+        }.getOrDefault(emptyList()).ifEmpty {
+            if (legacyWorkspace.isBlank()) emptyList()
+            else listOf(ProjectWorkspace(name = "Рабочая папка", treeUri = legacyWorkspace))
+        }
         return AppSettings(
             activeProfileId = activeId,
             profiles = profiles,
@@ -58,7 +75,9 @@ class LocalStore(context: Context) {
             customInstructions = preferences.getString("customInstructions", "").orEmpty(),
             temperatureEnabled = preferences.getBoolean("temperatureEnabled", false),
             temperature = preferences.getFloat("temperature", 0.7f).coerceIn(0f, 2f),
-            workspaceUri = preferences.getString("workspaceUri", "").orEmpty()
+            workspaceUri = legacyWorkspace,
+            projects = projects,
+            permissionOnboardingDone = preferences.getBoolean("permissionOnboardingDone", false)
         )
     }
 
@@ -77,6 +96,15 @@ class LocalStore(context: Context) {
                 put("reasoningEffort", profile.reasoningEffort)
             })
         }
+        val projectsJson = JSONArray()
+        value.projects.forEach { project ->
+            projectsJson.put(JSONObject().apply {
+                put("id", project.id)
+                put("name", project.name)
+                put("treeUri", project.treeUri)
+                put("createdAt", project.createdAt)
+            })
+        }
         preferences.edit()
             .putString("activeProfileId", value.activeProfileId)
             .putString("modelProfiles", profilesJson.toString())
@@ -85,6 +113,8 @@ class LocalStore(context: Context) {
             .putBoolean("temperatureEnabled", value.temperatureEnabled)
             .putFloat("temperature", value.temperature.coerceIn(0f, 2f))
             .putString("workspaceUri", value.workspaceUri)
+            .putString("projects", projectsJson.toString())
+            .putBoolean("permissionOnboardingDone", value.permissionOnboardingDone)
             .remove("endpoint")
             .remove("model")
             .remove("apiKey")
@@ -112,6 +142,7 @@ class LocalStore(context: Context) {
                 id = item.getString("id"),
                 title = item.optString("title", "Новый чат"),
                 modelProfileId = item.optString("modelProfileId", defaultProfileId),
+                projectId = item.optString("projectId", "").takeIf { it.isNotBlank() },
                 messages = messages,
                 updatedAt = item.optLong("updatedAt", 0L)
             )
@@ -135,6 +166,7 @@ class LocalStore(context: Context) {
                 put("id", conversation.id)
                 put("title", conversation.title)
                 put("modelProfileId", conversation.modelProfileId)
+                put("projectId", conversation.projectId ?: "")
                 put("updatedAt", conversation.updatedAt)
                 put("messages", messages)
             })

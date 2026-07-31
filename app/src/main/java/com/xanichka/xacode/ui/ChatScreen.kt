@@ -72,10 +72,12 @@ fun ChatScreen(
     state: AppUiState,
     onProfileSelected: (String) -> Unit,
     onSend: (String, String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenProjectFiles: () -> Unit = {}
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     var showModels by rememberSaveable { mutableStateOf(false) }
+    var showTools by rememberSaveable { mutableStateOf(false) }
     val attachments = remember { mutableStateListOf<UiAttachment>() }
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
@@ -109,7 +111,7 @@ fun ChatScreen(
 
     Column(modifier.fillMaxSize().imePadding()) {
         if (messages.isEmpty()) {
-            WelcomePanel(onSuggestion = { input = it }, modifier = Modifier.weight(1f))
+            WelcomePanel(projectName = state.activeProject?.name, onSuggestion = { input = it }, modifier = Modifier.weight(1f))
         } else {
             LazyColumn(
                 state = listState,
@@ -153,7 +155,7 @@ fun ChatScreen(
                         })
                     )
                     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { fileLauncher.launch(arrayOf("*/*")) }) {
+                        IconButton(onClick = { showTools = true }) {
                             Icon(PhIcons.Plus, "Добавить файл", Modifier.size(22.dp))
                         }
                         Surface(
@@ -201,6 +203,24 @@ fun ChatScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+    if (showTools) {
+        ModalBottomSheet(onDismissRequest = { showTools = false }, containerColor = MaterialTheme.colorScheme.surface) {
+            Text("Добавить в запрос", Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            ToolRow(PhIcons.Paperclip, "Файлы", "Прикрепить до четырёх файлов") { showTools = false; fileLauncher.launch(arrayOf("*/*")) }
+            ToolRow(PhIcons.FileCode, "Фото и скриншоты", "Выбрать изображение на устройстве") { showTools = false; fileLauncher.launch(arrayOf("image/*")) }
+            if (state.activeProject != null) ToolRow(PhIcons.Folders, "Файлы проекта", "Открыть, создать или изменить") { showTools = false; onOpenProjectFiles() }
+            ToolRow(PhIcons.Sliders, "Модель и интеллект", state.currentProfile.name) { showTools = false; showModels = true }
+            Spacer(Modifier.height(26.dp))
+        }
+    }
+}
+
+@Composable
+private fun ToolRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(Modifier.size(46.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) { Box(contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(23.dp)) } }
+        Spacer(Modifier.width(14.dp)); Column { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
+    }
 }
 
 @Composable
@@ -222,18 +242,20 @@ private fun ModelChoiceRow(profile: ModelProfile, selected: Boolean, onClick: ()
 }
 
 @Composable
-private fun WelcomePanel(onSuggestion: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, modifier: Modifier = Modifier) {
     val suggestions = listOf(
         PhIcons.FileCode to "Создай приложение по моей идее",
         PhIcons.Robot to "Напиши и настрой бота",
         PhIcons.Search to "Разберись в ошибке кода"
     )
-    Column(modifier.fillMaxWidth().padding(horizontal = 22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        BrandLogo(72.dp)
+    Column(modifier.fillMaxWidth().padding(start = 26.dp, end = 26.dp, bottom = 16.dp), horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.Bottom) {
+        if (projectName != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) { Icon(PhIcons.Folders, null, Modifier.size(25.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(projectName, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
+            Text("Чат работает в контексте этой папки", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        } else {
+            Text("Что будем делать?", fontSize = 23.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(18.dp))
-        Text("Чем помочь?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text("XaCode сам поймёт задачу и выберет подход", Modifier.padding(top = 7.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-        Spacer(Modifier.height(28.dp))
         suggestions.forEach { (icon, title) ->
             Row(Modifier.fillMaxWidth().clickable { onSuggestion(title) }.padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)

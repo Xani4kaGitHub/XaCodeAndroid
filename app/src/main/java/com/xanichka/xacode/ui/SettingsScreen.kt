@@ -67,6 +67,7 @@ import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
+import com.xanichka.xacode.model.ProjectWorkspace
 import com.xanichka.xacode.model.presetFor
 import com.xanichka.xacode.model.providerPresets
 import com.xanichka.xacode.ui.icons.PhIcons
@@ -154,7 +155,7 @@ fun SettingsScreen(
                         }
                     )
                 }
-                SettingsPage.DEVICE -> DeviceAccessPage(draft) { draft = draft.copy(workspaceUri = it) }
+                SettingsPage.DEVICE -> DeviceAccessPage(draft) { draft = it }
                 SettingsPage.PERSONALIZATION -> PersonalizationPage(draft) { draft = it }
             }
         }
@@ -176,7 +177,7 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.3.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.4.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
@@ -188,16 +189,9 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         }
         item {
             SettingsSection("УСТРОЙСТВО") {
-                SettingsRow(PhIcons.Folders, "Файлы и рабочая папка", if (settings.workspaceUri.isBlank()) "Доступ не выбран" else "Доступ разрешён", onDevice)
+                SettingsRow(PhIcons.Folders, "Проекты и доступ", if (settings.projects.isEmpty()) "Папки не добавлены" else "${settings.projects.size} рабочих папок", onDevice)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(PhIcons.Shield, "Безопасность", "Без root · Android SAF") { }
-            }
-        }
-        item {
-            SettingsSection("ПРИЛОЖЕНИЕ") {
-                SettingsRow(PhIcons.Palette, "Оформление", "Тёмная тема · синий акцент") { }
-                HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(PhIcons.Cpu, "Производительность", "Фоновое сохранение включено") { }
+                SettingsRow(PhIcons.Shield, "Разрешения Android", "Без root · только выбранный доступ", onDevice)
             }
         }
     }
@@ -328,26 +322,14 @@ private fun ProfileEditor(
 }
 
 @Composable
-private fun DeviceAccessPage(settings: AppSettings, onWorkspaceChanged: (String) -> Unit) {
+private fun DeviceAccessPage(settings: AppSettings, onSettingsChanged: (AppSettings) -> Unit) {
     val context = LocalContext.current
     val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            runCatching {
-                if (settings.workspaceUri.isNotBlank() && settings.workspaceUri != uri.toString()) {
-                    context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(settings.workspaceUri), permissionFlags)
-                }
-                context.contentResolver.takePersistableUriPermission(uri, permissionFlags)
-            }
-            onWorkspaceChanged(uri.toString())
-        }
-    }
-    val folderName = remember(settings.workspaceUri) {
-        runCatching { if (settings.workspaceUri.isBlank()) "Не выбрана" else DocumentsContract.getTreeDocumentId(android.net.Uri.parse(settings.workspaceUri)).substringAfterLast(':') }.getOrDefault("Выбранная папка")
-    }
-    val entryCount by produceState<Int?>(initialValue = null, settings.workspaceUri) {
-        value = if (settings.workspaceUri.isBlank()) null else withContext(Dispatchers.IO) {
-            runCatching { WorkspaceRepository(context).list(settings.workspaceUri).size }.getOrNull()
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, permissionFlags) }
+            val name = runCatching { DocumentsContract.getTreeDocumentId(uri).substringAfterLast(':').substringAfterLast('/').ifBlank { "Новый проект" } }.getOrDefault("Новый проект")
+            onSettingsChanged(settings.copy(projects = settings.projects + ProjectWorkspace(name = name, treeUri = uri.toString())))
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -356,28 +338,29 @@ private fun DeviceAccessPage(settings: AppSettings, onWorkspaceChanged: (String)
                 Column(Modifier.padding(18.dp)) {
                     Icon(PhIcons.Folders, null, Modifier.size(34.dp), tint = XaBlue)
                     Spacer(Modifier.height(12.dp))
-                    Text("Рабочая папка", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        buildString {
-                            append(folderName.ifBlank { "Корень выбранного хранилища" })
-                            entryCount?.let { append(" · $it элементов") }
-                        },
-                        Modifier.padding(top = 5.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("Рабочие проекты", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Каждый проект — отдельная папка и сколько угодно связанных чатов.", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(16.dp))
                     Button(onClick = { launcher.launch(null) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                        Icon(PhIcons.Folders, null); Spacer(Modifier.width(8.dp)); Text(if (settings.workspaceUri.isBlank()) "Выбрать папку" else "Изменить папку")
+                        Icon(PhIcons.Plus, null); Spacer(Modifier.width(8.dp)); Text("Добавить папку проекта")
                     }
-                    if (settings.workspaceUri.isNotBlank()) TextButton(onClick = {
-                        runCatching { context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(settings.workspaceUri), permissionFlags) }
-                        onWorkspaceChanged("")
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Отозвать доступ") }
+                }
+            }
+        }
+        items(settings.projects, key = { it.id }) { project ->
+            Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(PhIcons.Folders, null, Modifier.size(24.dp)); Spacer(Modifier.width(13.dp))
+                    Column(Modifier.weight(1f)) { Text(project.name, fontWeight = FontWeight.SemiBold); Text("Доступ к выбранной папке", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
+                    IconButton(onClick = {
+                        runCatching { context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(project.treeUri), permissionFlags) }
+                        onSettingsChanged(settings.copy(projects = settings.projects.filterNot { it.id == project.id }))
+                    }) { Icon(PhIcons.Trash, "Удалить проект") }
                 }
             }
         }
         item {
-            SettingsSection("КАК ЭТО РАБОТАЕТ") {
+            SettingsSection("БЕЗОПАСНОСТЬ") {
                 InfoRow(PhIcons.Shield, "Root не нужен", "Android сам выдаёт доступ только к выбранной папке")
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 InfoRow(PhIcons.FileCode, "Чтение и запись", "XaCode сможет работать с кодом и файлами проекта")

@@ -48,4 +48,19 @@ class WorkspaceRepository(private val context: Context) {
             ?: error("Не удалось открыть файл для записи")
         return file.uri.toString()
     }
+
+    fun updateText(documentUri: String, content: String) {
+        context.contentResolver.openOutputStream(Uri.parse(documentUri), "wt")?.bufferedWriter()?.use { it.write(content) }
+            ?: error("Не удалось открыть файл для записи")
+    }
+
+    fun createDirectory(parentUri: String, name: String): String {
+        val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri))
+            ?: error("Рабочая папка недоступна")
+        return (parent.findFile(name) ?: parent.createDirectory(name))?.uri?.toString()
+            ?: error("Не удалось создать папку")
+    }
+
+    fun delete(documentUri: String): Boolean =
+        DocumentFile.fromSingleUri(context, Uri.parse(documentUri))?.delete() == true
 }

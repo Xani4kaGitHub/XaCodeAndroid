@@ -5,11 +5,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xanichka.xacode.data.AiClient
 import com.xanichka.xacode.data.LocalStore
+import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.Conversation
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
+import com.xanichka.xacode.model.ProjectWorkspace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.withContext
 data class AppUiState(
     val conversations: List<Conversation> = emptyList(),
     val activeId: String? = null,
+    val activeProjectId: String? = null,
     val settings: AppSettings = AppSettings(),
     val isSending: Boolean = false,
     val testingProfileId: String? = null,
@@ -27,6 +30,7 @@ data class AppUiState(
     val error: String? = null
 ) {
     val activeConversation: Conversation? get() = conversations.firstOrNull { it.id == activeId }
+    val activeProject: ProjectWorkspace? get() = settings.projects.firstOrNull { it.id == activeProjectId }
     val currentProfile: ModelProfile
         get() = settings.profiles.firstOrNull { it.id == activeConversation?.modelProfileId }
             ?: settings.activeProfile
@@ -35,6 +39,7 @@ data class AppUiState(
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = LocalStore(application)
     private val client = AiClient()
+    private val workspace = WorkspaceRepository(application)
     private val persistenceDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val initialSettings = store.loadSettings()
     private val _state = MutableStateFlow(
@@ -45,9 +50,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     )
     val state = _state.asStateFlow()
 
-    fun selectConversation(id: String) = _state.update { it.copy(activeId = id) }
+    fun selectConversation(id: String) = _state.update { current ->
+        val conversation = current.conversations.firstOrNull { it.id == id }
+        current.copy(activeId = id, activeProjectId = conversation?.projectId)
+    }
 
-    fun newChat() = _state.update { it.copy(activeId = null, error = null) }
+    fun newChat(projectId: String? = _state.value.activeProjectId) = _state.update {
+        it.copy(activeId = null, activeProjectId = projectId, error = null)
+    }
+
+    fun selectProject(id: String?) = _state.update { current ->
+        val validId = id?.takeIf { wanted -> current.settings.projects.any { it.id == wanted } }
+        current.copy(activeProjectId = validId, activeId = null, error = null)
+    }
+
+    fun addProject(name: String, treeUri: String) {
+        if (treeUri.isBlank()) return
+        val project = ProjectWorkspace(name = name.ifBlank { "Новый проект" }, treeUri = treeUri)
+        saveSettings(_state.value.settings.copy(projects = _state.value.settings.projects + project))
+        selectProject(project.id)
+    }
+
+    fun removeProject(id: String) {
+        val settings = _state.value.settings.copy(projects = _state.value.settings.projects.filterNot { it.id == id })
+        saveSettings(settings)
+        _state.update { current ->
+            current.copy(activeProjectId = current.activeProjectId.takeUnless { it == id }, activeId = current.activeId.takeUnless { active -> current.conversations.firstOrNull { it.id == active }?.projectId == id })
+        }
+    }
+
+    fun finishPermissionOnboarding() = saveSettings(_state.value.settings.copy(permissionOnboardingDone = true))
 
     fun selectProfile(id: String) {
         var settingsToSave: AppSettings? = null
@@ -131,6 +163,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             Conversation(
                 title = prompt.replace('\n', ' ').take(42),
                 modelProfileId = snapshot.settings.activeProfileId,
+                projectId = snapshot.activeProjectId,
                 messages = listOf(userMessage)
             )
         } else {
@@ -145,7 +178,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val profile = currentSettings.profiles.firstOrNull { it.id == conversation.modelProfileId }
                 ?: currentSettings.activeProfile
             runCatching {
-                withContext(Dispatchers.IO) { client.complete(currentSettings, profile, conversation.messages) }
+                withContext(Dispatchers.IO) {
+                    val project = currentSettings.projects.firstOrNull { it.id == conversation.projectId }
+                    val projectContext = project?.let { selected ->
+                        runCatching {
+                            workspace.list(selected.treeUri).joinToString(", ") { entry ->
+                                (if (entry.isDirectory) "папка" else "файл") + ": " + entry.name
+                            }.takeIf { it.isNotBlank() }?.let { "Проект «${selected.name}». Содержимое корня: $it" }
+                        }.getOrNull().orEmpty()
+                    }.orEmpty()
+                    val messages = if (projectContext.isBlank()) conversation.messages else conversation.messages.mapIndexed { index, message ->
+                        if (index == conversation.messages.lastIndex && message.role == MessageRole.USER) {
+                            message.copy(context = listOf(projectContext, message.context).filter { it.isNotBlank() }.joinToString("\n\n"))
+                        } else message
+                    }
+                    client.complete(currentSettings, profile, messages)
+                }
             }.onSuccess { answer -> appendAssistant(conversation.id, answer) }
                 .onFailure { throwable ->
                     _state.update { it.copy(isSending = false, error = throwable.message ?: "Не удалось получить ответ") }

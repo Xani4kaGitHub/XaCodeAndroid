@@ -43,6 +43,14 @@ data class ModelProfile(
 )
 
 @Immutable
+data class ProjectWorkspace(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val treeUri: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Immutable
 data class AppSettings(
     val activeProfileId: String = "deepseek-default",
     val profiles: List<ModelProfile> = listOf(ModelProfile(id = "deepseek-default")),
@@ -50,7 +58,9 @@ data class AppSettings(
     val customInstructions: String = "",
     val temperatureEnabled: Boolean = false,
     val temperature: Float = 0.7f,
-    val workspaceUri: String = ""
+    val workspaceUri: String = "",
+    val projects: List<ProjectWorkspace> = emptyList(),
+    val permissionOnboardingDone: Boolean = false
 ) {
     val activeProfile: ModelProfile
         get() = profiles.firstOrNull { it.id == activeProfileId } ?: profiles.first()
@@ -72,6 +82,7 @@ data class Conversation(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "Новый чат",
     val modelProfileId: String = "deepseek-default",
+    val projectId: String? = null,
     val messages: List<ChatMessage> = emptyList(),
     val updatedAt: Long = System.currentTimeMillis()
 )
