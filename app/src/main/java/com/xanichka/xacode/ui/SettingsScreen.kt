@@ -502,7 +502,7 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                 if (termux.isInstalled() && !termux.hasPermission()) Button(onClick = { permissionLauncher.launch(TermuxBridge.RUN_PERMISSION) }) { Text("Дать доступ") }
             }
             Text(
-                "Проект должен быть во внутренней общей памяти. Команды запускаются без root и только после явного включения.",
+                "Проект должен быть во внутренней общей памяти. Команды запускаются только после явного включения.",
                 Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp
             )
         } }
