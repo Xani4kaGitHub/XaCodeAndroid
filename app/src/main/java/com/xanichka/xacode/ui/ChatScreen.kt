@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -129,7 +128,7 @@ fun ChatScreen(
                     if (state.isSending) item { ThinkingIndicator() }
                 }
     }
-    Column(modifier.fillMaxSize().imePadding()) {
+    Column(modifier.fillMaxSize()) {
         if (state.settings.animationsEnabled) Crossfade(targetState = messages.isEmpty(), label = "chat-content", modifier = Modifier.weight(1f), content = chatContent)
         else Box(Modifier.weight(1f)) { chatContent(messages.isEmpty()) }
 

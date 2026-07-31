@@ -185,7 +185,7 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.5.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.5.1", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
