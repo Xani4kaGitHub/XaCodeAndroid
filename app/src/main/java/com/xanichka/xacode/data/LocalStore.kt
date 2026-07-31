@@ -61,6 +61,7 @@ class LocalStore(context: Context) {
                     id = item.getString("id"),
                     name = item.optString("name", "Проект"),
                     treeUri = item.getString("treeUri"),
+                    managed = item.optBoolean("managed", false),
                     createdAt = item.optLong("createdAt", System.currentTimeMillis())
                 )
             }
@@ -76,8 +77,15 @@ class LocalStore(context: Context) {
             temperatureEnabled = preferences.getBoolean("temperatureEnabled", false),
             temperature = preferences.getFloat("temperature", 0.7f).coerceIn(0f, 2f),
             workspaceUri = legacyWorkspace,
+            projectsRootUri = preferences.getString("projectsRootUri", "").orEmpty().ifBlank {
+                projects.firstOrNull()?.treeUri.orEmpty()
+            },
             projects = projects,
-            permissionOnboardingDone = preferences.getBoolean("permissionOnboardingDone", false)
+            permissionOnboardingDone = preferences.getBoolean("permissionOnboardingDone", false),
+            agentFileToolsEnabled = preferences.getBoolean("agentFileToolsEnabled", true),
+            confirmDestructiveActions = preferences.getBoolean("confirmDestructiveActions", true),
+            autoVerifyChanges = preferences.getBoolean("autoVerifyChanges", true),
+            animationsEnabled = preferences.getBoolean("animationsEnabled", true)
         )
     }
 
@@ -102,6 +110,7 @@ class LocalStore(context: Context) {
                 put("id", project.id)
                 put("name", project.name)
                 put("treeUri", project.treeUri)
+                put("managed", project.managed)
                 put("createdAt", project.createdAt)
             })
         }
@@ -113,8 +122,13 @@ class LocalStore(context: Context) {
             .putBoolean("temperatureEnabled", value.temperatureEnabled)
             .putFloat("temperature", value.temperature.coerceIn(0f, 2f))
             .putString("workspaceUri", value.workspaceUri)
+            .putString("projectsRootUri", value.projectsRootUri)
             .putString("projects", projectsJson.toString())
             .putBoolean("permissionOnboardingDone", value.permissionOnboardingDone)
+            .putBoolean("agentFileToolsEnabled", value.agentFileToolsEnabled)
+            .putBoolean("confirmDestructiveActions", value.confirmDestructiveActions)
+            .putBoolean("autoVerifyChanges", value.autoVerifyChanges)
+            .putBoolean("animationsEnabled", value.animationsEnabled)
             .remove("endpoint")
             .remove("model")
             .remove("apiKey")

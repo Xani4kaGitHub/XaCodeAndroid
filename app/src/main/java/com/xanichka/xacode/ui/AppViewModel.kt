@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xanichka.xacode.data.AiClient
+import com.xanichka.xacode.data.AgentToolExecutor
 import com.xanichka.xacode.data.LocalStore
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.AppSettings
@@ -64,19 +65,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         current.copy(activeProjectId = validId, activeId = null, error = null)
     }
 
-    fun addProject(name: String, treeUri: String) {
+    fun addProject(name: String, treeUri: String, managed: Boolean = false) {
         if (treeUri.isBlank()) return
-        val project = ProjectWorkspace(name = name.ifBlank { "Новый проект" }, treeUri = treeUri)
+        val project = ProjectWorkspace(name = name.ifBlank { "Новый проект" }, treeUri = treeUri, managed = managed)
         saveSettings(_state.value.settings.copy(projects = _state.value.settings.projects + project))
         selectProject(project.id)
     }
 
-    fun removeProject(id: String) {
+    fun setProjectsRoot(uri: String) = saveSettings(_state.value.settings.copy(projectsRootUri = uri))
+
+    fun createProject(name: String) {
+        val root = _state.value.settings.projectsRootUri
+        if (root.isBlank()) { _state.update { it.copy(error = "Сначала выберите папку для новых проектов") }; return }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { workspace.createManagedProject(root, name) } }
+                .onSuccess { addProject(it.name, it.uri, managed = true) }
+                .onFailure { throwable -> _state.update { it.copy(error = throwable.message ?: "Не удалось создать проект") } }
+        }
+    }
+
+    fun removeProject(id: String, deleteFiles: Boolean = false) {
+        val project = _state.value.settings.projects.firstOrNull { it.id == id } ?: return
         val settings = _state.value.settings.copy(projects = _state.value.settings.projects.filterNot { it.id == id })
         saveSettings(settings)
+        var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
-            current.copy(activeProjectId = current.activeProjectId.takeUnless { it == id }, activeId = current.activeId.takeUnless { active -> current.conversations.firstOrNull { it.id == active }?.projectId == id })
+            val conversations = current.conversations.map { if (it.projectId == id) it.copy(projectId = null) else it }
+            conversationsToSave = conversations
+            current.copy(conversations = conversations, activeProjectId = current.activeProjectId.takeUnless { it == id }, activeId = current.activeId.takeUnless { active -> current.conversations.firstOrNull { it.id == active }?.projectId == id })
         }
+        viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
+        if (deleteFiles && project.managed) viewModelScope.launch(Dispatchers.IO) { workspace.delete(project.treeUri) }
     }
 
     fun finishPermissionOnboarding() = saveSettings(_state.value.settings.copy(permissionOnboardingDone = true))
@@ -192,7 +211,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             message.copy(context = listOf(projectContext, message.context).filter { it.isNotBlank() }.joinToString("\n\n"))
                         } else message
                     }
-                    client.complete(currentSettings, profile, messages)
+                    val tools = project?.takeIf { currentSettings.agentFileToolsEnabled }?.let {
+                        AgentToolExecutor(workspace, it.treeUri, currentSettings.confirmDestructiveActions)
+                    }
+                    client.complete(currentSettings, profile, messages, tools)
                 }
             }.onSuccess { answer -> appendAssistant(conversation.id, answer) }
                 .onFailure { throwable ->

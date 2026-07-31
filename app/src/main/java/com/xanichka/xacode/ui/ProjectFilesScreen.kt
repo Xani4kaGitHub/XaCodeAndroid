@@ -20,7 +20,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -59,6 +62,9 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
     var path by remember(project.id) { mutableStateOf(listOf(project.name to project.treeUri)) }
     var createKind by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var menuEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var renameEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var deleteEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
     var editorText by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val entries by produceState(initialValue = emptyList(), currentUri, refresh) {
@@ -100,6 +106,13 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
                         Icon(if (entry.isDirectory) PhIcons.Folders else PhIcons.FileCode, null, Modifier.size(23.dp))
                         Spacer(Modifier.width(13.dp))
                         Column(Modifier.weight(1f)) { Text(entry.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(if (entry.isDirectory) "Папка" else "${entry.size} байт", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
+                        androidx.compose.foundation.layout.Box {
+                            IconButton(onClick = { menuEntry = entry }) { Icon(PhIcons.More, "Действия") }
+                            DropdownMenu(expanded = menuEntry?.uri == entry.uri, onDismissRequest = { menuEntry = null }) {
+                                DropdownMenuItem(text = { Text("Переименовать") }, onClick = { menuEntry = null; renameEntry = entry })
+                                DropdownMenuItem(text = { Text("Удалить", color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(PhIcons.Trash, null, tint = MaterialTheme.colorScheme.error) }, onClick = { menuEntry = null; deleteEntry = entry })
+                            }
+                        }
                     }
                 }
             }
@@ -126,6 +139,13 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
             confirmButton = { Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.updateText(file.uri, editorText) } }.onSuccess { selected = null; refresh++ }.onFailure { error = it.message } } }) { Text("Сохранить") } },
             dismissButton = { TextButton(onClick = { selected = null }) { Text("Закрыть") } }
         )
+    }
+    renameEntry?.let { entry ->
+        var name by remember(entry.uri) { mutableStateOf(entry.name) }
+        AlertDialog(onDismissRequest = { renameEntry = null }, title = { Text("Переименовать") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Новое название") }, singleLine = true) }, confirmButton = { Button(enabled = name.isNotBlank(), onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.rename(entry.uri, name) } }.onSuccess { renameEntry = null; refresh++ }.onFailure { error = it.message } } }) { Text("Сохранить") } }, dismissButton = { TextButton(onClick = { renameEntry = null }) { Text("Отмена") } })
+    }
+    deleteEntry?.let { entry ->
+        AlertDialog(onDismissRequest = { deleteEntry = null }, title = { Text(if (entry.isDirectory) "Удалить папку?" else "Удалить файл?") }, text = { Text("«${entry.name}» будет удалён без возможности восстановления.") }, confirmButton = { TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.delete(entry.uri) } }.onSuccess { deleteEntry = null; refresh++ }.onFailure { error = it.message } } }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleteEntry = null }) { Text("Отмена") } })
     }
     error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("Ошибка доступа") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("Понятно") } }) }
 }

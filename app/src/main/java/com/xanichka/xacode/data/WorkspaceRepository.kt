@@ -69,4 +69,80 @@ class WorkspaceRepository(private val context: Context) {
 
     fun delete(documentUri: String): Boolean =
         DocumentFile.fromSingleUri(context, Uri.parse(documentUri))?.delete() == true
+
+    fun rename(documentUri: String, newName: String): Boolean =
+        DocumentFile.fromSingleUri(context, Uri.parse(documentUri))?.renameTo(newName) == true
+
+    fun createManagedProject(rootUri: String, name: String): WorkspaceEntry {
+        val safeName = name.trim().replace(Regex("[\\/:*?\"<>|]"), "-").ifBlank { "Новый проект" }
+        val root = directory(rootUri) ?: error("Папка проектов недоступна")
+        val folder = root.findFile(safeName) ?: root.createDirectory(safeName)
+            ?: error("Не удалось создать папку проекта")
+        require(folder.isDirectory) { "Объект с таким именем уже существует" }
+        return WorkspaceEntry(folder.name ?: safeName, folder.uri.toString(), true, 0)
+    }
+
+    fun resolve(rootUri: String, relativePath: String): DocumentFile? {
+        var current = directory(rootUri) ?: return null
+        val parts = relativePath.replace('\\', '/').split('/').filter { it.isNotBlank() && it != "." }
+        if (parts.any { it == ".." }) return null
+        for (part in parts) current = current.findFile(part) ?: return null
+        return current
+    }
+
+    fun listRelative(rootUri: String, relativePath: String = ""): List<WorkspaceEntry> {
+        val folder = if (relativePath.isBlank()) directory(rootUri) else resolve(rootUri, relativePath)?.takeIf { it.isDirectory }
+        return folder?.listFiles()?.map { file -> WorkspaceEntry(file.name ?: "Без имени", file.uri.toString(), file.isDirectory, file.length()) }
+            ?.sortedWith(compareByDescending<WorkspaceEntry> { it.isDirectory }.thenBy { it.name.lowercase() }).orEmpty()
+    }
+
+    fun readRelative(rootUri: String, relativePath: String): String =
+        resolve(rootUri, relativePath)?.takeIf { it.isFile }?.let { readText(it.uri.toString()) }
+            ?: error("Файл не найден: $relativePath")
+
+    fun writeRelative(rootUri: String, relativePath: String, content: String) {
+        val normalized = relativePath.replace('\\', '/').trim('/')
+        require(normalized.isNotBlank() && !normalized.split('/').contains("..")) { "Недопустимый путь" }
+        val parentPath = normalized.substringBeforeLast('/', "")
+        val name = normalized.substringAfterLast('/')
+        val parent = ensureDirectories(rootUri, parentPath)
+        val existing = parent.findFile(name)
+        val file = existing ?: parent.createFile("text/plain", name) ?: error("Не удалось создать файл")
+        require(file.isFile) { "По этому пути находится папка" }
+        updateText(file.uri.toString(), content)
+    }
+
+    fun createDirectoryRelative(rootUri: String, relativePath: String) {
+        ensureDirectories(rootUri, relativePath)
+    }
+
+    fun deleteRelative(rootUri: String, relativePath: String): Boolean {
+        require(relativePath.isNotBlank()) { "Нельзя удалить корень проекта" }
+        return resolve(rootUri, relativePath)?.delete() == true
+    }
+
+    fun search(rootUri: String, query: String, limit: Int = 40): List<String> {
+        val result = mutableListOf<String>()
+        fun walk(folder: DocumentFile, prefix: String, depth: Int) {
+            if (depth > 8 || result.size >= limit) return
+            folder.listFiles().forEach { child ->
+                val name = child.name ?: return@forEach
+                val path = if (prefix.isBlank()) name else "$prefix/$name"
+                if (name.contains(query, true)) result += path
+                if (child.isDirectory) walk(child, path, depth + 1)
+            }
+        }
+        directory(rootUri)?.let { walk(it, "", 0) }
+        return result.take(limit)
+    }
+
+    private fun ensureDirectories(rootUri: String, relativePath: String): DocumentFile {
+        var current = directory(rootUri) ?: error("Папка проекта недоступна")
+        relativePath.replace('\\', '/').split('/').filter { it.isNotBlank() }.forEach { part ->
+            require(part != "..") { "Недопустимый путь" }
+            current = current.findFile(part)?.takeIf { it.isDirectory } ?: current.createDirectory(part)
+                ?: error("Не удалось создать папку $part")
+        }
+        return current
+    }
 }

@@ -64,7 +64,7 @@ fun PermissionCenter(hasProjects: Boolean, onChooseFolder: () -> Unit, onDone: (
                 Spacer(Modifier.weight(1f))
                 Button(onClick = ::requestSelected, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Продолжить", Modifier.padding(vertical = 5.dp), fontWeight = FontWeight.Bold) }
                 TextButton(onClick = onDone, Modifier.fillMaxWidth()) { Text("Пока без разрешений") }
-                Text("Root-доступ не используется", Modifier.align(Alignment.CenterHorizontally), color = XaBlue, fontSize = 11.sp)
+                Text("Доступ можно изменить в настройках", Modifier.align(Alignment.CenterHorizontally), color = XaBlue, fontSize = 11.sp)
             }
         }
     }

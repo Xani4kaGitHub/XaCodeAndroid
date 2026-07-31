@@ -70,12 +70,20 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var openModelSettings by rememberSaveable { mutableStateOf(false) }
     var showFiles by rememberSaveable { mutableStateOf(false) }
+    var showCreateProject by rememberSaveable { mutableStateOf(false) }
     var permissionCenter by rememberSaveable { mutableStateOf(!state.settings.permissionOnboardingDone) }
-    val folderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+    fun persistFolder(uri: android.net.Uri) {
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+    }
+    val rootFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) { persistFolder(uri); viewModel.setProjectsRoot(uri.toString()) }
+    }
+    val externalFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+            persistFolder(uri)
             val name = runCatching { DocumentsContract.getTreeDocumentId(uri).substringAfterLast(':').substringAfterLast('/').ifBlank { "Новый проект" } }.getOrDefault("Новый проект")
             viewModel.addProject(name, uri.toString())
         }
@@ -84,12 +92,13 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
     if (showSettings) {
         SettingsScreen(
             initial = state.settings,
+            startAtModels = openModelSettings,
             testingProfileId = state.testingProfileId,
             connectionResult = state.connectionResult,
             onTest = viewModel::testProfile,
             onClearResult = viewModel::clearConnectionResult,
-            onDismiss = { showSettings = false },
-            onSave = { viewModel.saveSettings(it); showSettings = false }
+            onDismiss = { showSettings = false; openModelSettings = false },
+            onSave = { viewModel.saveSettings(it); showSettings = false; openModelSettings = false }
         )
     } else if (showFiles && state.activeProject != null) {
         Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), color = MaterialTheme.colorScheme.background) {
@@ -107,9 +116,11 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
                     settings = state.settings,
                     onNewChat = { viewModel.newChat(null); scope.launch { drawerState.close() } },
                     onSelectProject = { viewModel.selectProject(it); scope.launch { drawerState.close() } },
-                    onNewProject = { folderLauncher.launch(null) },
+                    onNewProject = { if (state.settings.projectsRootUri.isBlank()) rootFolderLauncher.launch(null) else showCreateProject = true },
+                    onAddExternalProject = { externalFolderLauncher.launch(null) },
                     onSelect = { viewModel.selectConversation(it); scope.launch { drawerState.close() } },
                     onDelete = viewModel::deleteConversation,
+                    onDeleteProject = viewModel::removeProject,
                     onSettings = { showSettings = true; scope.launch { drawerState.close() } }
                 )
             }
@@ -123,16 +134,31 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
                     onNewChat = { viewModel.newChat(state.activeProjectId) }
                 )
             }) { padding ->
-                ChatScreen(state, viewModel::selectProfile, viewModel::send, Modifier.padding(padding), onOpenProjectFiles = { showFiles = true })
+                ChatScreen(
+                    state, viewModel::selectProfile, viewModel::send, Modifier.padding(padding),
+                    onOpenProjectFiles = { showFiles = true },
+                    onOpenModelSettings = { openModelSettings = true; showSettings = true }
+                )
             }
         }
     }
 
     if (permissionCenter) {
         PermissionCenter(
-            hasProjects = state.settings.projects.isNotEmpty(),
-            onChooseFolder = { folderLauncher.launch(null) },
+            hasProjects = state.settings.projectsRootUri.isNotBlank(),
+            onChooseFolder = { rootFolderLauncher.launch(null) },
             onDone = { permissionCenter = false; viewModel.finishPermissionOnboarding() }
+        )
+    }
+    if (showCreateProject) {
+        var projectName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreateProject = false },
+            icon = { Icon(PhIcons.Folders, null) },
+            title = { Text("Новый проект") },
+            text = { Column { Text("XaCode создаст отдельную папку внутри выбранного хранилища.", color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.size(12.dp)); OutlinedTextField(projectName, { projectName = it }, label = { Text("Название проекта") }, singleLine = true) } },
+            confirmButton = { TextButton(enabled = projectName.isNotBlank(), onClick = { viewModel.createProject(projectName); showCreateProject = false }) { Text("Создать") } },
+            dismissButton = { TextButton(onClick = { showCreateProject = false }) { Text("Отмена") } }
         )
     }
     state.error?.let { message ->
@@ -164,36 +190,57 @@ private fun ChatHeader(title: String, subtitle: String, onMenu: () -> Unit, onTi
 @Composable
 private fun AppDrawer(
     conversations: List<Conversation>, projects: List<ProjectWorkspace>, activeId: String?, activeProjectId: String?, settings: AppSettings,
-    onNewChat: () -> Unit, onSelectProject: (String) -> Unit, onNewProject: () -> Unit, onSelect: (String) -> Unit,
-    onDelete: (String) -> Unit, onSettings: () -> Unit
+    onNewChat: () -> Unit, onSelectProject: (String) -> Unit, onNewProject: () -> Unit, onAddExternalProject: () -> Unit, onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit, onDeleteProject: (String, Boolean) -> Unit, onSettings: () -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    val visible = remember(conversations, query) { conversations.filter { query.isBlank() || it.title.contains(query, true) } }
+    val visible = remember(conversations, query) { conversations.filter { (query.isNotBlank() && it.title.contains(query, true)) || (query.isBlank() && it.projectId == null) } }
     ModalDrawerSheet(Modifier.width(342.dp), drawerContainerColor = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(40.dp); Spacer(Modifier.width(11.dp)); Text("XaCode", fontWeight = FontWeight.Bold, fontSize = 22.sp, modifier = Modifier.weight(1f))
-                CircleIconButton(PhIcons.Search, "Поиск", onClick = { })
+                CircleIconButton(PhIcons.Plus, "Новый чат", onClick = onNewChat)
             }
             OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 14.dp), placeholder = { Text("Поиск в чатах") }, leadingIcon = { Icon(PhIcons.Search, null, Modifier.size(19.dp)) }, singleLine = true, shape = RoundedCornerShape(24.dp))
-            DrawerAction(PhIcons.Chat, "Новый чат", "Без папки", onNewChat)
-            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 14.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("ПРОЕКТЫ", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp)
-                IconButton(onClick = onNewProject) { Icon(PhIcons.Plus, "Добавить проект", Modifier.size(19.dp)) }
-            }
-            projects.forEach { project ->
-                DrawerAction(PhIcons.Folders, project.name, "${conversations.count { it.projectId == project.id }} чатов", { onSelectProject(project.id) }, selected = activeProjectId == project.id)
-            }
-            Text("ЧАТЫ", Modifier.padding(start = 18.dp, top = 14.dp, bottom = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp)
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 8.dp)) {
+            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)) {
+                item { DrawerAction(PhIcons.Chat, "Новый чат", "Без папки", onNewChat) }
+                item { Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) { Text("ПРОЕКТЫ", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp); IconButton(onClick = onNewProject) { Icon(PhIcons.Plus, "Добавить проект", Modifier.size(19.dp)) } } }
+                items(projects, key = { "project-${it.id}" }) { project ->
+                    Column {
+                        ProjectDrawerRow(project, conversations.count { it.projectId == project.id }, activeProjectId == project.id, { onSelectProject(project.id) }, onDeleteProject)
+                        conversations.filter { it.projectId == project.id }.take(4).forEach { conversation -> NestedConversationRow(conversation, conversation.id == activeId) { onSelect(conversation.id) } }
+                    }
+                }
+                item { TextButton(onClick = onAddExternalProject, Modifier.padding(horizontal = 12.dp)) { Icon(PhIcons.Paperclip, null, Modifier.size(17.dp)); Spacer(Modifier.width(7.dp)); Text("Подключить другую папку") } }
+                item { Text("ЧАТЫ", Modifier.padding(start = 18.dp, top = 12.dp, bottom = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp) }
                 items(visible, key = { it.id }) { conversation ->
-                    DrawerConversationRow(conversation, settings.profiles.firstOrNull { it.id == conversation.modelProfileId }?.name ?: "Модель", conversation.id == activeId, { onSelect(conversation.id) }, { onDelete(conversation.id) })
+                    Box(Modifier.padding(horizontal = 8.dp)) { DrawerConversationRow(conversation, settings.profiles.firstOrNull { it.id == conversation.modelProfileId }?.name ?: "Модель", conversation.id == activeId, { onSelect(conversation.id) }, { onDelete(conversation.id) }) }
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .3f))
             DrawerAction(PhIcons.Settings, "Настройки", "Модели, API и доступ", onSettings)
         }
     }
+}
+
+@Composable
+private fun NestedConversationRow(conversation: Conversation, selected: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 38.dp, end = 10.dp).background(if (selected) XaSurfaceHigh else MaterialTheme.colorScheme.background, RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(conversation.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+        if (selected) Surface(Modifier.size(6.dp), shape = androidx.compose.foundation.shape.CircleShape, color = XaBlue) {}
+    }
+}
+
+@Composable
+private fun ProjectDrawerRow(project: ProjectWorkspace, chatCount: Int, selected: Boolean, onClick: () -> Unit, onDelete: (String, Boolean) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp).background(if (selected) XaSurfaceHigh else MaterialTheme.colorScheme.background, RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(start = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(PhIcons.Folders, null, Modifier.size(22.dp), tint = if (selected) XaBlue else MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold); Text("$chatCount чатов", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
+        Box { IconButton(onClick = { expanded = true }) { Icon(PhIcons.More, "Действия", Modifier.size(18.dp)) }; DropdownMenu(expanded, { expanded = false }) { DropdownMenuItem(text = { Text("Убрать из XaCode") }, onClick = { expanded = false; onDelete(project.id, false) }); if (project.managed) DropdownMenuItem(text = { Text("Удалить папку и содержимое", color = MaterialTheme.colorScheme.error) }, onClick = { expanded = false; confirmDelete = true }) } }
+    }
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Удалить проект?") }, text = { Text("Папка «${project.name}» и всё внутри неё будут удалены без возможности восстановления.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete(project.id, true) }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } })
 }
 
 @Composable

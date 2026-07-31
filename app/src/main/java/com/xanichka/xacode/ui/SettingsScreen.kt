@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -76,11 +77,12 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private enum class SettingsPage { HOME, MODELS, PROFILE, DEVICE, PERSONALIZATION }
+private enum class SettingsPage { HOME, MODELS, PROFILE, DEVICE, PERSONALIZATION, TOOLS, APPEARANCE }
 
 @Composable
 fun SettingsScreen(
     initial: AppSettings,
+    startAtModels: Boolean = false,
     testingProfileId: String?,
     connectionResult: String?,
     onTest: (AppSettings, ModelProfile) -> Unit,
@@ -89,7 +91,7 @@ fun SettingsScreen(
     onSave: (AppSettings) -> Unit
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
-    var page by rememberSaveable { mutableStateOf(SettingsPage.HOME) }
+    var page by rememberSaveable { mutableStateOf(if (startAtModels) SettingsPage.MODELS else SettingsPage.HOME) }
     var editingId by rememberSaveable(initial.activeProfileId) { mutableStateOf(initial.activeProfileId) }
 
     fun goBack() {
@@ -106,6 +108,8 @@ fun SettingsScreen(
                     SettingsPage.PROFILE -> "Подключение"
                     SettingsPage.DEVICE -> "Доступ к устройству"
                     SettingsPage.PERSONALIZATION -> "Персонализация"
+                    SettingsPage.TOOLS -> "Инструменты агента"
+                    SettingsPage.APPEARANCE -> "Оформление"
                 },
                 isHome = page == SettingsPage.HOME,
                 onBack = ::goBack,
@@ -116,7 +120,9 @@ fun SettingsScreen(
                     draft,
                     onModels = { page = SettingsPage.MODELS },
                     onDevice = { page = SettingsPage.DEVICE },
-                    onPersonalization = { page = SettingsPage.PERSONALIZATION }
+                    onPersonalization = { page = SettingsPage.PERSONALIZATION },
+                    onTools = { page = SettingsPage.TOOLS },
+                    onAppearance = { page = SettingsPage.APPEARANCE }
                 )
                 SettingsPage.MODELS -> ModelsPage(
                     settings = draft,
@@ -157,6 +163,8 @@ fun SettingsScreen(
                 }
                 SettingsPage.DEVICE -> DeviceAccessPage(draft) { draft = it }
                 SettingsPage.PERSONALIZATION -> PersonalizationPage(draft) { draft = it }
+                SettingsPage.TOOLS -> ToolsPage(draft) { draft = it }
+                SettingsPage.APPEARANCE -> AppearancePage(draft) { draft = it }
             }
         }
     }
@@ -172,12 +180,12 @@ private fun SettingsHeader(title: String, isHome: Boolean, onBack: () -> Unit, o
 }
 
 @Composable
-private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: () -> Unit, onPersonalization: () -> Unit) {
+private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: () -> Unit, onPersonalization: () -> Unit, onTools: () -> Unit, onAppearance: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.4.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.5.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
@@ -185,13 +193,22 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
                 SettingsRow(PhIcons.Robot, "Модели и API", "${settings.profiles.size} подключений", onModels)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 SettingsRow(PhIcons.Sliders, "Персонализация", if (settings.customInstructionsEnabled) "Свои инструкции включены" else "Стандартное поведение", onPersonalization)
+                HorizontalDivider(Modifier.padding(start = 58.dp))
+                SettingsRow(PhIcons.Cpu, "Инструменты агента", if (settings.agentFileToolsEnabled) "Файловые инструменты включены" else "Выключены", onTools)
             }
         }
         item {
             SettingsSection("УСТРОЙСТВО") {
                 SettingsRow(PhIcons.Folders, "Проекты и доступ", if (settings.projects.isEmpty()) "Папки не добавлены" else "${settings.projects.size} рабочих папок", onDevice)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(PhIcons.Shield, "Разрешения Android", "Без root · только выбранный доступ", onDevice)
+                SettingsRow(PhIcons.Shield, "Разрешения Android", "Только выбранные папки", onDevice)
+            }
+        }
+        item {
+            SettingsSection("ПРИЛОЖЕНИЕ") {
+                SettingsRow(PhIcons.Palette, "Оформление", "Catppuccin", onAppearance)
+                HorizontalDivider(Modifier.padding(start = 58.dp))
+                InfoRow(PhIcons.Storage, "Локальные данные", "История хранится на этом устройстве")
             }
         }
     }
@@ -325,11 +342,17 @@ private fun ProfileEditor(
 private fun DeviceAccessPage(settings: AppSettings, onSettingsChanged: (AppSettings) -> Unit) {
     val context = LocalContext.current
     val permissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+    val rootLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, permissionFlags) }
+            onSettingsChanged(settings.copy(projectsRootUri = uri.toString()))
+        }
+    }
+    val externalLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, permissionFlags) }
             val name = runCatching { DocumentsContract.getTreeDocumentId(uri).substringAfterLast(':').substringAfterLast('/').ifBlank { "Новый проект" } }.getOrDefault("Новый проект")
-            onSettingsChanged(settings.copy(projects = settings.projects + ProjectWorkspace(name = name, treeUri = uri.toString())))
+            onSettingsChanged(settings.copy(projects = settings.projects + ProjectWorkspace(name = name, treeUri = uri.toString(), managed = false)))
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -338,31 +361,30 @@ private fun DeviceAccessPage(settings: AppSettings, onSettingsChanged: (AppSetti
                 Column(Modifier.padding(18.dp)) {
                     Icon(PhIcons.Folders, null, Modifier.size(34.dp), tint = XaBlue)
                     Spacer(Modifier.height(12.dp))
-                    Text("Рабочие проекты", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("Каждый проект — отдельная папка и сколько угодно связанных чатов.", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Папка новых проектов", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(if (settings.projectsRootUri.isBlank()) "Выберите место, где XaCode будет создавать подпапки проектов." else "Новые проекты будут создаваться внутри этой папки.", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(16.dp))
-                    Button(onClick = { launcher.launch(null) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                        Icon(PhIcons.Plus, null); Spacer(Modifier.width(8.dp)); Text("Добавить папку проекта")
+                    Button(onClick = { rootLauncher.launch(null) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                        Icon(PhIcons.Folders, null); Spacer(Modifier.width(8.dp)); Text(if (settings.projectsRootUri.isBlank()) "Выбрать папку" else "Изменить папку")
                     }
                 }
             }
         }
+        item { OutlinedButton(onClick = { externalLauncher.launch(null) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Icon(PhIcons.Paperclip, null); Spacer(Modifier.width(8.dp)); Text("Подключить существующую папку") } }
         items(settings.projects, key = { it.id }) { project ->
             Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(PhIcons.Folders, null, Modifier.size(24.dp)); Spacer(Modifier.width(13.dp))
-                    Column(Modifier.weight(1f)) { Text(project.name, fontWeight = FontWeight.SemiBold); Text("Доступ к выбранной папке", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
+                    Column(Modifier.weight(1f)) { Text(project.name, fontWeight = FontWeight.SemiBold); Text(if (project.managed) "Создан XaCode" else "Подключённая папка", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
                     IconButton(onClick = {
-                        runCatching { context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(project.treeUri), permissionFlags) }
+                        if (!project.managed) runCatching { context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(project.treeUri), permissionFlags) }
                         onSettingsChanged(settings.copy(projects = settings.projects.filterNot { it.id == project.id }))
                     }) { Icon(PhIcons.Trash, "Удалить проект") }
                 }
             }
         }
         item {
-            SettingsSection("БЕЗОПАСНОСТЬ") {
-                InfoRow(PhIcons.Shield, "Root не нужен", "Android сам выдаёт доступ только к выбранной папке")
-                HorizontalDivider(Modifier.padding(start = 58.dp))
+            SettingsSection("ДОСТУП") {
                 InfoRow(PhIcons.FileCode, "Чтение и запись", "XaCode сможет работать с кодом и файлами проекта")
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 InfoRow(PhIcons.Key, "Доступ сохраняется", "Повторно выбирать папку после перезапуска не нужно")
@@ -386,7 +408,7 @@ private fun PersonalizationPage(settings: AppSettings, onChange: (AppSettings) -
             SettingsSection("ИНСТРУКЦИИ") {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) { Text("Свои инструкции", fontWeight = FontWeight.SemiBold); Text("Язык, стиль и технологии", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-                    Switch(settings.customInstructionsEnabled, { onChange(settings.copy(customInstructionsEnabled = it)) })
+                    XaSwitch(settings.customInstructionsEnabled) { onChange(settings.copy(customInstructionsEnabled = it)) }
                 }
                 if (settings.customInstructionsEnabled) OutlinedTextField(
                     settings.customInstructions,
@@ -403,7 +425,7 @@ private fun PersonalizationPage(settings: AppSettings, onChange: (AppSettings) -
             SettingsSection("ГЕНЕРАЦИЯ") {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) { Text("Своя temperature", fontWeight = FontWeight.SemiBold); Text("Точность ↔ творчество", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-                    Switch(settings.temperatureEnabled, { onChange(settings.copy(temperatureEnabled = it)) })
+                    XaSwitch(settings.temperatureEnabled) { onChange(settings.copy(temperatureEnabled = it)) }
                 }
                 if (settings.temperatureEnabled) Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text("${"%.1f".format(settings.temperature)}", color = XaBlue, fontWeight = FontWeight.Bold)
@@ -412,6 +434,71 @@ private fun PersonalizationPage(settings: AppSettings, onChange: (AppSettings) -
             }
         }
     }
+}
+
+@Composable
+private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item {
+            Text("По подходу XaCode Desktop модель получает только включённые инструменты. На Android они работают строго внутри папки проекта.", color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
+        }
+        item { SettingsSection("ФАЙЛЫ ПРОЕКТА") {
+            ToggleRow("Файловые инструменты", "Чтение, запись, поиск, создание и переименование", settings.agentFileToolsEnabled) { onChange(settings.copy(agentFileToolsEnabled = it)) }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+            ToggleRow("Подтверждать удаление", "Спрашивать перед необратимыми действиями", settings.confirmDestructiveActions) { onChange(settings.copy(confirmDestructiveActions = it)) }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+            ToggleRow("Проверять изменения", "После работы перечитать изменённые файлы", settings.autoVerifyChanges) { onChange(settings.copy(autoVerifyChanges = it)) }
+        } }
+        item { SettingsSection("ДОСТУПНЫЕ ИНСТРУМЕНТЫ") {
+            InfoRow(PhIcons.FileCode, "read_file · write_file · edit_file", "Чтение и изменение кода")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Search, "list_directory · search_code", "Навигация и поиск")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Folders, "create · rename · delete", "Управление файлами и папками")
+        } }
+    }
+}
+
+@Composable
+private fun AppearancePage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        item {
+            SettingsSection("ТЕМА") {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text("Catppuccin", fontWeight = FontWeight.Bold); Text("Тёмная фиолетовая палитра", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+                    Icon(PhIcons.Check, null, tint = XaBlue)
+                }
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf(Color(0xFFCBA6F7), Color(0xFF1E1E2E), Color(0xFFCDD6F4), Color(0xFFF38BA8)).forEach { color -> Surface(Modifier.size(36.dp), shape = CircleShape, color = color, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {} }
+                }
+            }
+        }
+        item { SettingsSection("ИНТЕРФЕЙС") { ToggleRow("Плавные анимации", "Переходы экранов и появление элементов", settings.animationsEnabled) { onChange(settings.copy(animationsEnabled = it)) } } }
+    }
+}
+
+@Composable
+private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 17.sp) }
+        Spacer(Modifier.width(12.dp)); XaSwitch(checked, onCheckedChange)
+    }
+}
+
+@Composable
+private fun XaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+            checkedTrackColor = XaBlue,
+            checkedBorderColor = XaBlue,
+            uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+            uncheckedBorderColor = MaterialTheme.colorScheme.outline
+        )
+    )
 }
 
 @Composable

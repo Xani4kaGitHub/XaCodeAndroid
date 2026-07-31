@@ -4,6 +4,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
@@ -73,7 +80,8 @@ fun ChatScreen(
     onProfileSelected: (String) -> Unit,
     onSend: (String, String) -> Unit,
     modifier: Modifier = Modifier,
-    onOpenProjectFiles: () -> Unit = {}
+    onOpenProjectFiles: () -> Unit = {},
+    onOpenModelSettings: () -> Unit = {}
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     var showModels by rememberSaveable { mutableStateOf(false) }
@@ -109,23 +117,24 @@ fun ChatScreen(
         if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex + if (state.isSending) 1 else 0)
     }
 
+    val chatContent: @Composable (Boolean) -> Unit = { empty ->
+            if (empty) WelcomePanel(projectName = state.activeProject?.name, onSuggestion = { input = it }, modifier = Modifier.fillMaxSize())
+            else LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    items(messages, key = { it.id }) { MessageItem(it) }
+                    if (state.isSending) item { ThinkingIndicator() }
+                }
+    }
     Column(modifier.fillMaxSize().imePadding()) {
-        if (messages.isEmpty()) {
-            WelcomePanel(projectName = state.activeProject?.name, onSuggestion = { input = it }, modifier = Modifier.weight(1f))
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
-            ) {
-                items(messages, key = { it.id }) { MessageItem(it) }
-                if (state.isSending) item { ThinkingIndicator() }
-            }
-        }
+        if (state.settings.animationsEnabled) Crossfade(targetState = messages.isEmpty(), label = "chat-content", modifier = Modifier.weight(1f), content = chatContent)
+        else Box(Modifier.weight(1f)) { chatContent(messages.isEmpty()) }
 
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).navigationBarsPadding()) {
-            if (attachments.isNotEmpty()) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).navigationBarsPadding().animateContentSize()) {
+            AnimatedVisibility(attachments.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     attachments.take(3).forEach { attachment ->
                         AssistChip(
@@ -137,22 +146,22 @@ fun ChatScreen(
                     }
                 }
             }
-            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                Column(Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
-                    OutlinedTextField(
+            Surface(shape = RoundedCornerShape(27.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .72f))) {
+                Column(Modifier.padding(horizontal = 7.dp, vertical = 6.dp)) {
+                    BasicTextField(
                         value = input,
                         onValueChange = { input = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Спроси или создай что-нибудь…") },
-                        minLines = 1,
-                        maxLines = 6,
-                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(XaBlue),
+                        minLines = 1, maxLines = 5,
                         keyboardActions = KeyboardActions(onSend = {
                             if (input.isNotBlank()) {
                                 val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
                                 onSend(input, fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
                             }
-                        })
+                        }),
+                        decorationBox = { inner -> Box { if (input.isBlank()) Text("Спроси или создай что-нибудь…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp); inner() } }
                     )
                     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { showTools = true }) {
@@ -188,7 +197,6 @@ fun ChatScreen(
                     }
                 }
             }
-            Text("AI может ошибаться — проверяйте важные действия", Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
         }
     }
 
@@ -200,6 +208,7 @@ fun ChatScreen(
                     onProfileSelected(profile.id); showModels = false
                 }
             }
+            ToolRow(PhIcons.Settings, "Настройки моделей", "API-ключи, провайдеры и параметры") { showModels = false; onOpenModelSettings() }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -248,16 +257,15 @@ private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, m
         PhIcons.Robot to "Напиши и настрой бота",
         PhIcons.Search to "Разберись в ошибке кода"
     )
-    Column(modifier.fillMaxWidth().padding(start = 26.dp, end = 26.dp, bottom = 16.dp), horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.Bottom) {
-        if (projectName != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Icon(PhIcons.Folders, null, Modifier.size(25.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(projectName, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
-            Text("Чат работает в контексте этой папки", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-        } else {
-            Text("Что будем делать?", fontSize = 23.sp, fontWeight = FontWeight.Bold)
+    LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 26.dp, end = 26.dp, top = 20.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom)) {
+        item {
+            Column { if (projectName != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(PhIcons.Folders, null, Modifier.size(25.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(projectName, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
+                Text("Чат работает в контексте этой папки", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            } else Text("Что будем делать?", fontSize = 25.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)) }
         }
-        Spacer(Modifier.height(18.dp))
-        suggestions.forEach { (icon, title) ->
-            Row(Modifier.fillMaxWidth().clickable { onSuggestion(title) }.padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+        items(suggestions) { (icon, title) ->
+            Row(Modifier.fillMaxWidth().clickable { onSuggestion(title) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(13.dp))
                 Text(title, fontSize = 15.sp)

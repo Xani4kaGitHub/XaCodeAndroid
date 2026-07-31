@@ -5,26 +5,26 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val XaBlue = Color(0xFF4C86F7)
-val XaBackground = Color(0xFF0C0E12)
-val XaSurface = Color(0xFF17191E)
-val XaSurfaceHigh = Color(0xFF22252C)
-val XaText = Color(0xFFF4F6FA)
-val XaMuted = Color(0xFF969BA6)
+val XaBlue = Color(0xFFCBA6F7)
+val XaBackground = Color(0xFF1E1E2E)
+val XaSurface = Color(0xFF272736)
+val XaSurfaceHigh = Color(0xFF353543)
+val XaText = Color(0xFFCDD6F4)
+val XaMuted = Color(0xFF9096AF)
 
 private val XaCodeColors = darkColorScheme(
     primary = XaBlue,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFF193661),
-    onPrimaryContainer = Color(0xFFD8E7FF),
+    onPrimary = Color(0xFF1E1E2E),
+    primaryContainer = Color(0xFF3B3151),
+    onPrimaryContainer = Color(0xFFE7D5FF),
     background = XaBackground,
     onBackground = XaText,
     surface = XaSurface,
     onSurface = XaText,
     surfaceVariant = XaSurfaceHigh,
     onSurfaceVariant = XaMuted,
-    outline = Color(0xFF353941),
-    error = Color(0xFFFF8A80)
+    outline = Color(0xFF42424F),
+    error = Color(0xFFF38BA8)
 )
 
 @Composable

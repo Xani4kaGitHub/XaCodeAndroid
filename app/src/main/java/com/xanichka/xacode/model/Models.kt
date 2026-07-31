@@ -47,6 +47,7 @@ data class ProjectWorkspace(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val treeUri: String,
+    val managed: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -59,8 +60,13 @@ data class AppSettings(
     val temperatureEnabled: Boolean = false,
     val temperature: Float = 0.7f,
     val workspaceUri: String = "",
+    val projectsRootUri: String = "",
     val projects: List<ProjectWorkspace> = emptyList(),
-    val permissionOnboardingDone: Boolean = false
+    val permissionOnboardingDone: Boolean = false,
+    val agentFileToolsEnabled: Boolean = true,
+    val confirmDestructiveActions: Boolean = true,
+    val autoVerifyChanges: Boolean = true,
+    val animationsEnabled: Boolean = true
 ) {
     val activeProfile: ModelProfile
         get() = profiles.firstOrNull { it.id == activeProfileId } ?: profiles.first()

@@ -11,7 +11,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class AiClient {
-    fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>): String {
+    fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null): String {
         require(profile.baseUrl.startsWith("https://") || profile.baseUrl.startsWith("http://")) {
             "Укажите полный адрес API в настройках модели"
         }
@@ -20,15 +20,19 @@ class AiClient {
             append("Ты XaCode — самостоятельный AI-агент для разработки и обычных вопросов. ")
             append("Сам определи намерение пользователя: ответить, написать код, спроектировать приложение или создать бота. ")
             append("Не проси выбирать режим. Давай практичный результат на языке пользователя.")
+            if (tools != null) {
+                append("\nУ тебя есть инструменты файлов проекта. Сначала изучи структуру и нужные файлы, затем вноси изменения небольшими шагами. Не выдумывай содержимое файлов.")
+                if (settings.autoVerifyChanges) append(" После записи перечитай важные изменённые файлы и проверь результат перед финальным ответом.")
+            }
             if (settings.customInstructionsEnabled && settings.customInstructions.isNotBlank()) {
                 append("\n\nПользовательские инструкции:\n")
                 append(settings.customInstructions)
             }
         }
         return if (usesAnthropicFormat(profile)) {
-            completeAnthropic(settings, profile, systemPrompt, messages)
+            completeAnthropic(settings, profile, systemPrompt, messages, tools)
         } else {
-            completeOpenAi(settings, profile, systemPrompt, messages)
+            completeOpenAi(settings, profile, systemPrompt, messages, tools)
         }
     }
 
@@ -42,7 +46,8 @@ class AiClient {
         settings: AppSettings,
         profile: ModelProfile,
         systemPrompt: String,
-        messages: List<ChatMessage>
+        messages: List<ChatMessage>,
+        tools: AgentToolExecutor?
     ): String {
         val bodyMessages = JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt))
         messages.forEach { message ->
@@ -52,6 +57,7 @@ class AiClient {
             })
         }
         val payload = JSONObject().put("messages", bodyMessages)
+        if (tools != null) payload.put("tools", tools.definitions).put("tool_choice", "auto")
         if (profile.model != "-") payload.put("model", profile.model)
         if (settings.temperatureEnabled) payload.put("temperature", settings.temperature.toDouble())
         if (profile.provider == ProviderType.DEEPSEEK && profile.reasoningEffort != "disabled") {
@@ -59,9 +65,7 @@ class AiClient {
             payload.put("reasoning_effort", profile.reasoningEffort)
         }
 
-        val response = request(
-            url = openAiEndpoint(profile.baseUrl),
-            headers = buildMap {
+        val headers = buildMap {
                 put("Content-Type", "application/json")
                 if (profile.apiKey.isNotBlank() && profile.apiKey != "-") put("Authorization", "Bearer ${profile.apiKey}")
                 when (profile.provider) {
@@ -76,18 +80,27 @@ class AiClient {
                     }
                     else -> Unit
                 }
-            },
-            payload = payload
-        )
-        return JSONObject(response).getJSONArray("choices").getJSONObject(0)
-            .getJSONObject("message").optString("content").trim()
+            }
+        repeat(8) {
+            val response = request(openAiEndpoint(profile.baseUrl), headers, payload)
+            val message = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+            val calls = message.optJSONArray("tool_calls")
+            if (tools == null || calls == null || calls.length() == 0) return message.optString("content").trim()
+            bodyMessages.put(message)
+            for (index in 0 until calls.length()) {
+                val call = calls.getJSONObject(index); val function = call.getJSONObject("function")
+                bodyMessages.put(JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content", tools.execute(function.getString("name"), function.optString("arguments", "{}"))))
+            }
+        }
+        return "Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта."
     }
 
     private fun completeAnthropic(
         settings: AppSettings,
         profile: ModelProfile,
         systemPrompt: String,
-        messages: List<ChatMessage>
+        messages: List<ChatMessage>,
+        tools: AgentToolExecutor?
     ): String {
         val bodyMessages = JSONArray()
         messages.forEach { message ->
@@ -100,11 +113,10 @@ class AiClient {
             .put("system", systemPrompt)
             .put("messages", bodyMessages)
             .put("max_tokens", profile.maxContextTokens.coerceIn(1_024, 16_384))
+        if (tools != null) payload.put("tools", tools.anthropicDefinitions)
         if (profile.model != "-") payload.put("model", profile.model)
         if (settings.temperatureEnabled) payload.put("temperature", settings.temperature.toDouble())
-        val response = request(
-            url = anthropicEndpoint(profile.baseUrl),
-            headers = buildMap {
+        val headers = buildMap {
                 put("Content-Type", "application/json")
                 put("anthropic-version", "2023-06-01")
                 if (profile.apiKey.isNotBlank() && profile.apiKey != "-") {
@@ -115,13 +127,18 @@ class AiClient {
                     put("Originator", "codex_cli_rs")
                     put("Version", "0.101.0")
                 }
-            },
-            payload = payload
-        )
-        val content = JSONObject(response).optJSONArray("content") ?: JSONArray()
-        return (0 until content.length()).mapNotNull { index ->
-            content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text")
-        }.joinToString("").trim()
+            }
+        repeat(8) {
+            val response = request(anthropicEndpoint(profile.baseUrl), headers, payload)
+            val content = JSONObject(response).optJSONArray("content") ?: JSONArray()
+            val toolUses = (0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "tool_use" } }
+            if (tools == null || toolUses.isEmpty()) return (0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim()
+            bodyMessages.put(JSONObject().put("role", "assistant").put("content", content))
+            val results = JSONArray()
+            toolUses.forEach { use -> results.put(JSONObject().put("type", "tool_result").put("tool_use_id", use.getString("id")).put("content", tools.execute(use.getString("name"), use.optJSONObject("input")?.toString() ?: "{}"))) }
+            bodyMessages.put(JSONObject().put("role", "user").put("content", results))
+        }
+        return "Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта."
     }
 
     private fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
