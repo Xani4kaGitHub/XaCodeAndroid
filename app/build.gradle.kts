@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.chaquo.python")
 }
 
 android {
@@ -12,11 +13,12 @@ android {
         applicationId = "com.xanichka.xacode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.6.0"
+        versionCode = 8
+        versionName = "0.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        ndk.abiFilters += listOf("arm64-v8a", "x86_64")
     }
 
     buildTypes {
@@ -36,6 +38,12 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.13"
+    }
 }
 
 dependencies {

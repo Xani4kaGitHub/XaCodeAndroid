@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,12 +61,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.model.ChatMessage
@@ -141,7 +144,7 @@ fun ChatScreen(
         if (state.settings.animationsEnabled) Crossfade(targetState = messages.isEmpty(), label = "chat-content", modifier = Modifier.weight(1f), content = chatContent)
         else Box(Modifier.weight(1f)) { chatContent(messages.isEmpty()) }
 
-        Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).navigationBarsPadding().animateContentSize()) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).navigationBarsPadding().imePadding().animateContentSize()) {
             AnimatedVisibility(attachments.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     attachments.take(3).forEach { attachment ->
@@ -269,7 +272,7 @@ private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, m
         item {
             Column { if (projectName != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(PhIcons.Folders, null, Modifier.size(25.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(projectName, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
-                Text("Android-проект · доступно 15 инструментов", Modifier.padding(top = 5.dp), color = XaBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text("Android-проект · доступно 17 инструментов", Modifier.padding(top = 5.dp), color = XaBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Text("XaCode может читать, создавать, менять и удалять файлы этой папки", Modifier.padding(top = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             } else Text("Что будем делать?", fontSize = 25.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)) }
         }
@@ -321,32 +324,99 @@ private fun MarkdownText(markdown: String) {
                 val content = part.substringAfter('\n', part).trimEnd()
                 val language = part.substringBefore('\n', "").trim()
                 CodeBlock(language, content)
-            } else part.lines().forEach { line ->
-                when {
-                    line.startsWith("### ") -> Text(inlineMarkdown(line.drop(4)), fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                    line.startsWith("## ") -> Text(inlineMarkdown(line.drop(3)), fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    line.startsWith("# ") -> Text(inlineMarkdown(line.drop(2)), fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    line.startsWith("- ") || line.startsWith("* ") -> Row { Text("•  ", color = XaBlue); Text(inlineMarkdown(line.drop(2)), Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp) }
-                    line.matches(Regex("^\\d+\\. .*")) -> { val marker = line.substringBefore(' ') + " "; Row { Text(marker, color = XaBlue); Text(inlineMarkdown(line.substringAfter(' ')), Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp) } }
-                    line.isBlank() -> Spacer(Modifier.height(3.dp))
-                    else -> Text(inlineMarkdown(line), fontSize = 15.sp, lineHeight = 22.sp)
+            } else MarkdownLines(part.lines())
+        }
+    }
+}
+
+@Composable
+private fun MarkdownLines(lines: List<String>) {
+    var index = 0
+    while (index < lines.size) {
+        val line = lines[index]
+        val isTable = '|' in line && index + 1 < lines.size && '|' in lines[index + 1] &&
+            lines[index + 1].split('|').filter { it.isNotBlank() }.all { it.trim().matches(Regex(":?-{3,}:?")) }
+        when {
+            isTable -> {
+                val table = mutableListOf(line)
+                index += 2
+                while (index < lines.size && '|' in lines[index] && lines[index].isNotBlank()) table += lines[index++]
+                MarkdownTable(table)
+                continue
+            }
+            line.trim() == "$$" -> {
+                val expression = mutableListOf<String>()
+                index++
+                while (index < lines.size && lines[index].trim() != "$$") expression += lines[index++]
+                MathBlock(expression.joinToString("\n"))
+            }
+            line.trim().startsWith("$$") -> MathBlock(line.trim().removePrefix("$$").removeSuffix("$$"))
+            line.startsWith("### ") -> Text(inlineMarkdown(line.drop(4)), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            line.startsWith("## ") -> Text(inlineMarkdown(line.drop(3)), fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            line.startsWith("# ") -> Text(inlineMarkdown(line.drop(2)), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            line.startsWith("> ") -> Surface(color = XaBlue.copy(alpha = .09f), shape = RoundedCornerShape(8.dp)) { Text(inlineMarkdown(line.drop(2)), Modifier.padding(10.dp), fontSize = 14.sp, lineHeight = 21.sp) }
+            line.matches(Regex("^[-*] \\[[xX ]].*")) -> Row { Text(if (line.substring(3, 4).equals("x", true)) "☑  " else "☐  ", color = XaBlue); Text(inlineMarkdown(line.drop(6)), Modifier.weight(1f), fontSize = 15.sp) }
+            line.startsWith("- ") || line.startsWith("* ") -> Row { Text("•  ", color = XaBlue); Text(inlineMarkdown(line.drop(2)), Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp) }
+            line.matches(Regex("^\\d+\\. .*")) -> { val marker = line.substringBefore(' ') + " "; Row { Text(marker, color = XaBlue); Text(inlineMarkdown(line.substringAfter(' ')), Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp) } }
+            line.isBlank() -> Spacer(Modifier.height(3.dp))
+            line.trim().matches(Regex("-{3,}")) -> androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .5f))
+            else -> Text(inlineMarkdown(line), fontSize = 15.sp, lineHeight = 22.sp)
+        }
+        index++
+    }
+}
+
+@Composable
+private fun MarkdownTable(rows: List<String>) {
+    val cells = rows.map { row -> row.trim().trim('|').split('|').map { it.trim() } }
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Column(Modifier.horizontalScroll(rememberScrollState()).padding(6.dp)) {
+            cells.forEachIndexed { rowIndex, row ->
+                Row {
+                    row.forEach { cell ->
+                        Text(inlineMarkdown(cell), Modifier.width(150.dp).padding(horizontal = 9.dp, vertical = 8.dp), fontSize = 12.sp, fontWeight = if (rowIndex == 0) FontWeight.Bold else FontWeight.Normal)
+                    }
                 }
+                if (rowIndex == 0) androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .55f))
             }
         }
     }
 }
 
+@Composable
+private fun MathBlock(expression: String) {
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Text(prettyMath(expression), Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(14.dp), fontFamily = FontFamily.Serif, fontSize = 18.sp, lineHeight = 26.sp, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
 private fun inlineMarkdown(text: String) = buildAnnotatedString {
-    val regex = Regex("(\\*\\*.+?\\*\\*|`.+?`)")
+    val regex = Regex("(\\*\\*.+?\\*\\*|~~.+?~~|`.+?`|\\$.+?\\$|\\[[^]]+]\\([^)]+\\)|(?<!\\*)\\*[^*]+?\\*(?!\\*)|_[^_]+?_)")
     var cursor = 0
     regex.findAll(text).forEach { match ->
         append(text.substring(cursor, match.range.first))
         val token = match.value
         if (token.startsWith("**")) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(token.drop(2).dropLast(2)) }
-        else withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = XaBlue, background = androidx.compose.ui.graphics.Color(0x26353143))) { append(token.drop(1).dropLast(1)) }
+        else if (token.startsWith("~~")) withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(token.drop(2).dropLast(2)) }
+        else if (token.startsWith("`")) withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = XaBlue, background = androidx.compose.ui.graphics.Color(0x26353143))) { append(token.drop(1).dropLast(1)) }
+        else if (token.startsWith("$")) withStyle(SpanStyle(fontFamily = FontFamily.Serif, color = XaBlue)) { append(prettyMath(token.drop(1).dropLast(1))) }
+        else if (token.startsWith("[")) withStyle(SpanStyle(color = XaBlue, textDecoration = TextDecoration.Underline)) { append(token.substringAfter('[').substringBefore(']')) }
+        else withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(token.drop(1).dropLast(1)) }
         cursor = match.range.last + 1
     }
     append(text.substring(cursor))
+}
+
+private fun prettyMath(source: String): String {
+    var value = source
+    val fractions = Regex("\\\\frac\\{([^{}]+)}\\{([^{}]+)}")
+    while (fractions.containsMatchIn(value)) value = fractions.replace(value) { "(${it.groupValues[1]})⁄(${it.groupValues[2]})" }
+    return value
+        .replace(Regex("\\\\sqrt\\{([^{}]+)}")) { "√(${it.groupValues[1]})" }
+        .replace("\\\\times", "×").replace("\\\\div", "÷").replace("\\\\cdot", "·")
+        .replace("\\\\le", "≤").replace("\\\\ge", "≥").replace("\\\\ne", "≠")
+        .replace("\\\\pi", "π").replace("\\\\infty", "∞")
+        .replace("^{2}", "²").replace("^2", "²").replace("^{3}", "³").replace("^3", "³")
 }
 
 @Composable

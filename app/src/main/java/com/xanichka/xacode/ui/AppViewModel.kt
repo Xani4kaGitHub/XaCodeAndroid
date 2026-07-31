@@ -9,6 +9,7 @@ import com.xanichka.xacode.data.AiResult
 import com.xanichka.xacode.data.AgentProgress
 import com.xanichka.xacode.data.LocalStore
 import com.xanichka.xacode.data.WorkspaceRepository
+import com.xanichka.xacode.data.PythonRuntime
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.Conversation
@@ -44,6 +45,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = LocalStore(application)
     private val client = AiClient()
     private val workspace = WorkspaceRepository(application)
+    private val pythonRuntime = PythonRuntime(application, workspace)
     private val persistenceDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val initialSettings = store.loadSettings()
     private val _state = MutableStateFlow(
@@ -82,6 +84,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (root.isBlank()) { _state.update { it.copy(error = "Сначала выберите папку для новых проектов") }; return }
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { workspace.createManagedProject(root, name) } }
+                .onSuccess { addProject(it.name, it.uri, managed = true) }
+                .onFailure { throwable -> _state.update { it.copy(error = throwable.message ?: "Не удалось создать проект") } }
+        }
+    }
+
+    fun createRandomProject(rootOverride: String? = null) {
+        val root = rootOverride ?: _state.value.settings.projectsRootUri
+        if (root.isBlank()) { _state.update { it.copy(error = "Сначала выберите папку для новых проектов") }; return }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { workspace.createRandomManagedProject(root) } }
                 .onSuccess { addProject(it.name, it.uri, managed = true) }
                 .onFailure { throwable -> _state.update { it.copy(error = throwable.message ?: "Не удалось создать проект") } }
         }
@@ -215,7 +227,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         } else message
                     }
                     val tools = project?.takeIf { currentSettings.agentFileToolsEnabled }?.let {
-                        AgentToolExecutor(workspace, it.treeUri, currentSettings.confirmDestructiveActions)
+                        AgentToolExecutor(workspace, it.treeUri, pythonRuntime)
                     }
                     client.complete(currentSettings, profile, messages, tools) { progress -> _state.update { it.copy(agentProgress = progress) } }
                 }

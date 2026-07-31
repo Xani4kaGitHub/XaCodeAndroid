@@ -2,8 +2,10 @@ package com.xanichka.xacode.data
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import org.json.JSONObject
+import java.io.File
 
 data class WorkspaceEntry(
     val name: String,
@@ -14,6 +16,8 @@ data class WorkspaceEntry(
 
 /** Read/write access constrained to the folder explicitly granted through Android SAF. */
 class WorkspaceRepository(private val context: Context) {
+    private val projectAdjectives = listOf("bright", "calm", "clever", "cosmic", "crisp", "gentle", "lucky", "rapid", "silent", "vivid")
+    private val projectNouns = listOf("badger", "falcon", "forest", "harbor", "meteor", "otter", "pixel", "rocket", "studio", "willow")
     private fun directory(uri: String): DocumentFile? {
         val parsed = Uri.parse(uri)
         return DocumentFile.fromTreeUri(context, parsed)?.takeIf { it.isDirectory }
@@ -49,7 +53,7 @@ class WorkspaceRepository(private val context: Context) {
     fun writeText(parentUri: String, fileName: String, content: String): String {
         val parent = directory(parentUri)
             ?: error("Рабочая папка недоступна")
-        val file = parent.findFile(fileName) ?: parent.createFile("text/plain", fileName)
+        val file = parent.findFile(fileName) ?: parent.createFile(mimeType(fileName), fileName)
             ?: error("Не удалось создать файл")
         context.contentResolver.openOutputStream(file.uri, "wt")?.bufferedWriter()?.use { it.write(content) }
             ?: error("Не удалось открыть файл для записи")
@@ -71,8 +75,11 @@ class WorkspaceRepository(private val context: Context) {
     fun delete(documentUri: String): Boolean =
         DocumentFile.fromSingleUri(context, Uri.parse(documentUri))?.delete() == true
 
-    fun rename(documentUri: String, newName: String): Boolean =
-        DocumentFile.fromSingleUri(context, Uri.parse(documentUri))?.renameTo(newName) == true
+    fun rename(documentUri: String, newName: String): Boolean {
+        require(newName.isNotBlank() && '/' !in newName && '\\' !in newName) { "Недопустимое название" }
+        val uri = Uri.parse(documentUri)
+        return DocumentsContract.renameDocument(context.contentResolver, uri, newName) != null
+    }
 
     fun createManagedProject(rootUri: String, name: String): WorkspaceEntry {
         val safeName = name.trim().replace(Regex("[\\/:*?\"<>|]"), "-").ifBlank { "Новый проект" }
@@ -81,6 +88,19 @@ class WorkspaceRepository(private val context: Context) {
             ?: error("Не удалось создать папку проекта")
         require(folder.isDirectory) { "Объект с таким именем уже существует" }
         return WorkspaceEntry(folder.name ?: safeName, folder.uri.toString(), true, 0)
+    }
+
+    fun createRandomManagedProject(rootUri: String): WorkspaceEntry {
+        val root = directory(rootUri) ?: error("Папка проектов недоступна")
+        repeat(50) { attempt ->
+            val suffix = if (attempt > 12) "-${(10..99).random()}" else ""
+            val name = "${projectAdjectives.random()}-${projectNouns.random()}$suffix"
+            if (root.findFile(name) == null) {
+                val folder = root.createDirectory(name) ?: error("Не удалось создать папку проекта")
+                return WorkspaceEntry(name, folder.uri.toString(), true, 0)
+            }
+        }
+        return createManagedProject(rootUri, "project-${System.currentTimeMillis()}")
     }
 
     fun resolve(rootUri: String, relativePath: String): DocumentFile? {
@@ -114,7 +134,7 @@ class WorkspaceRepository(private val context: Context) {
         val name = normalized.substringAfterLast('/')
         val parent = ensureDirectories(rootUri, parentPath)
         val existing = parent.findFile(name)
-        val file = existing ?: parent.createFile("text/plain", name) ?: error("Не удалось создать файл")
+        val file = existing ?: parent.createFile(mimeType(name), name) ?: error("Не удалось создать файл")
         require(file.isFile) { "По этому пути находится папка" }
         updateText(file.uri.toString(), content)
     }
@@ -126,6 +146,73 @@ class WorkspaceRepository(private val context: Context) {
     fun deleteRelative(rootUri: String, relativePath: String): Boolean {
         require(relativePath.isNotBlank()) { "Нельзя удалить корень проекта" }
         return resolve(rootUri, relativePath)?.delete() == true
+    }
+
+    fun renameRelative(rootUri: String, relativePath: String, newName: String): Boolean {
+        require(newName.isNotBlank() && '/' !in newName && '\\' !in newName) { "Недопустимое название" }
+        val source = resolve(rootUri, relativePath) ?: error("Путь не найден: $relativePath")
+        if (runCatching { rename(source.uri.toString(), newName) }.getOrDefault(false)) return true
+        require(source.isFile) { "Этот Android-провайдер не поддерживает переименование папок" }
+        val parentPath = relativePath.replace('\\', '/').substringBeforeLast('/', "")
+        val parent = (if (parentPath.isBlank()) directory(rootUri) else resolve(rootUri, parentPath))
+            ?: error("Родительская папка недоступна")
+        require(parent.findFile(newName) == null) { "Файл с таким названием уже существует" }
+        val target = parent.createFile(mimeType(newName), newName) ?: error("Не удалось создать файл с новым названием")
+        context.contentResolver.openInputStream(source.uri)?.use { input ->
+            context.contentResolver.openOutputStream(target.uri, "wt")?.use { output -> input.copyTo(output) }
+                ?: error("Не удалось записать переименованный файл")
+        } ?: error("Не удалось прочитать исходный файл")
+        if (!source.delete()) { target.delete(); error("Не удалось удалить исходный файл") }
+        return true
+    }
+
+    fun writeBytesRelative(rootUri: String, relativePath: String, bytes: ByteArray) {
+        val normalized = relativePath.replace('\\', '/').trim('/')
+        require(normalized.isNotBlank() && !normalized.split('/').contains("..")) { "Недопустимый путь" }
+        val parent = ensureDirectories(rootUri, normalized.substringBeforeLast('/', ""))
+        val name = normalized.substringAfterLast('/')
+        val file = parent.findFile(name) ?: parent.createFile(mimeType(name), name) ?: error("Не удалось создать файл")
+        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(bytes) }
+            ?: error("Не удалось записать файл")
+    }
+
+    fun exportProject(rootUri: String, destination: File) {
+        val root = directory(rootUri) ?: error("Папка проекта недоступна")
+        fun copy(folder: DocumentFile, target: File, depth: Int) {
+            require(depth <= 20) { "Слишком глубокая структура проекта" }
+            target.mkdirs()
+            folder.listFiles().forEach { child ->
+                val safeName = child.name?.takeIf { it != "." && it != ".." } ?: return@forEach
+                if (child.isDirectory && safeName in setOf(".git", ".gradle", "build", "node_modules", "__pycache__")) return@forEach
+                val output = File(target, safeName)
+                if (child.isDirectory) copy(child, output, depth + 1)
+                else context.contentResolver.openInputStream(child.uri)?.use { input -> output.outputStream().use(input::copyTo) }
+            }
+        }
+        copy(root, destination, 0)
+    }
+
+    fun syncProject(rootUri: String, source: File) {
+        require(source.isDirectory) { "Python workspace недоступен" }
+        source.walkTopDown().filter { it.isFile && it.extension.lowercase() != "pyc" && "__pycache__" !in it.invariantSeparatorsPath }.forEach { file ->
+            val relative = file.relativeTo(source).invariantSeparatorsPath
+            writeBytesRelative(rootUri, relative, file.readBytes())
+        }
+    }
+
+    private fun mimeType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "py" -> "text/x-python"
+        "js", "mjs", "cjs" -> "text/javascript"
+        "ts", "tsx" -> "application/typescript"
+        "html", "htm" -> "text/html"
+        "css" -> "text/css"
+        "json" -> "application/json"
+        "xml" -> "application/xml"
+        "md" -> "text/markdown"
+        "kt", "kts" -> "text/x-kotlin"
+        "java" -> "text/x-java-source"
+        "txt", "log", "csv" -> "text/plain"
+        else -> "application/octet-stream"
     }
 
     fun search(rootUri: String, query: String, limit: Int = 40): List<String> {

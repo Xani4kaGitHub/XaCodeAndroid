@@ -25,7 +25,7 @@ class AiClient {
             append("Ты работаешь внутри нативного Android-приложения XaCode, а не на Windows или обычном ПК. Не упоминай PowerShell и пути C:\\, если пользователь сам их не дал. ")
             append("Не проси выбирать режим. Давай практичный результат на языке пользователя.")
             if (tools != null) {
-                append("\nТекущий чат привязан к папке проекта. У тебя реально есть Android-инструменты inspect_workspace, list_directory, read_file, write_file, edit_file, find_files, file_info, search_code, create_directory, rename_file, delete_file, apply_patch, undo_file и manage_todos. ")
+                append("\nТекущий чат привязан к папке проекта. У тебя реально есть Android-инструменты inspect_workspace, list_directory, read_file, write_file, edit_file, find_files, file_info, search_code, create_directory, rename_file, delete_file, apply_patch, undo_file, manage_todos, http_download и run_python. ")
                 append("Если пользователь просит создать или изменить проект, ОБЯЗАТЕЛЬНО вызывай инструменты, а не просто печатай код в ответе. Сначала изучи структуру и нужные файлы, затем вноси изменения небольшими шагами. Не выдумывай содержимое файлов.")
                 if (settings.autoVerifyChanges) append(" После записи перечитай важные изменённые файлы и проверь результат перед финальным ответом.")
             } else {

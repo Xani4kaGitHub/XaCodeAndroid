@@ -2,12 +2,14 @@ package com.xanichka.xacode.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 /** Safe Android subset of XaCode Desktop tools. Every path is resolved inside one SAF project folder. */
 class AgentToolExecutor(
     private val repository: WorkspaceRepository,
     private val projectUri: String,
-    private val confirmDestructiveActions: Boolean
+    private val pythonRuntime: PythonRuntime
 ) {
     private val backups = linkedMapOf<String, String>()
     private val todos = linkedMapOf<Int, String>()
@@ -28,6 +30,8 @@ class AgentToolExecutor(
         put(tool("undo_file", "Restore the last in-memory backup made during this task", JSONObject().put("path", string("Relative file path")), listOf("path")))
         put(tool("manage_todos", "Manage a task-local todo list", JSONObject().put("action", enumString("add", "list", "complete", "delete")).put("textOrId", string("Todo text or numeric id")), listOf("action")))
         put(tool("finish_task", "Finish after checking that requested work is complete", JSONObject().put("summary", string("Short result summary")), listOf("summary")))
+        put(tool("http_download", "Download a file from an HTTP or HTTPS URL into the current project", JSONObject().put("url", string("Source URL")).put("path", string("Relative destination path with extension")), listOf("url", "path")))
+        put(tool("run_python", "Run a Python .py file from the current Android project and return stdout and stderr", JSONObject().put("path", string("Relative .py entry file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
     }
     val anthropicDefinitions: JSONArray = JSONArray().apply {
         for (index in 0 until definitions.length()) {
@@ -55,18 +59,18 @@ class AgentToolExecutor(
             "search_code" -> repository.searchCode(projectUri, args.getString("pattern")).joinToString("\n").ifBlank { "Nothing found" }
             "inspect_workspace" -> repository.inspectWorkspace(projectUri)
             "rename_file" -> {
-                val file = repository.resolve(projectUri, args.getString("path")) ?: error("Path not found")
                 val newName = args.getString("newName"); require('/' !in newName && '\\' !in newName) { "newName must not contain a path" }
-                require(repository.rename(file.uri.toString(), newName)) { "Rename failed" }; "Renamed successfully"
+                require(repository.renameRelative(projectUri, args.getString("path"), newName)) { "Rename failed" }; "Renamed successfully"
             }
             "delete_file" -> {
-                if (confirmDestructiveActions) "Deletion requires user confirmation. Ask the user to delete it from the project file screen or disable confirmation in settings."
-                else { require(repository.deleteRelative(projectUri, args.getString("path"))) { "Delete failed" }; "Deleted successfully" }
+                require(repository.deleteRelative(projectUri, args.getString("path"))) { "Delete failed" }; "Deleted successfully"
             }
             "apply_patch" -> { val path = args.getString("path"); val source = repository.readRelative(projectUri, path); backups[path] = source; repository.writeRelative(projectUri, path, applyUnifiedDiff(source, args.getString("patch"))); "Patch applied successfully" }
             "undo_file" -> { val path = args.getString("path"); val content = backups.remove(path) ?: error("No backup for $path"); repository.writeRelative(projectUri, path, content); "File restored" }
             "manage_todos" -> manageTodos(args)
             "finish_task" -> "Task finished: ${args.getString("summary")}"
+            "http_download" -> download(args.getString("url"), args.getString("path"))
+            "run_python" -> pythonRuntime.run(projectUri, args.getString("path"), args.optJSONArray("arguments") ?: JSONArray())
             else -> "Unknown tool: $name"
         }
     }.getOrElse { "Tool error: ${it.message}" }
@@ -97,5 +101,33 @@ class AgentToolExecutor(
             result = result.replaceFirst(needle, replacement.joinToString("\n"))
         }
         return result
+    }
+
+    private fun download(sourceUrl: String, path: String): String {
+        require(sourceUrl.startsWith("https://") || sourceUrl.startsWith("http://")) { "Only HTTP and HTTPS URLs are supported" }
+        val connection = URL(sourceUrl).openConnection() as HttpURLConnection
+        return try {
+            connection.connectTimeout = 20_000
+            connection.readTimeout = 60_000
+            connection.instanceFollowRedirects = true
+            require(connection.responseCode in 200..299) { "Download failed with HTTP ${connection.responseCode}" }
+            val declared = connection.contentLengthLong
+            require(declared < 0 || declared <= 25L * 1024 * 1024) { "File is larger than 25 MB" }
+            val bytes = connection.inputStream.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16_384)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= 25 * 1024 * 1024) { "File is larger than 25 MB" }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+            repository.writeBytesRelative(projectUri, path, bytes)
+            "Downloaded ${bytes.size} bytes to $path"
+        } finally { connection.disconnect() }
     }
 }

@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.data.WorkspaceEntry
 import com.xanichka.xacode.data.WorkspaceRepository
+import com.xanichka.xacode.data.PythonRuntime
 import com.xanichka.xacode.model.ProjectWorkspace
 import com.xanichka.xacode.ui.icons.PhIcons
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,7 @@ import kotlinx.coroutines.withContext
 fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
     val context = LocalContext.current
     val repository = remember(context) { WorkspaceRepository(context) }
+    val pythonRuntime = remember(context) { PythonRuntime(context, repository) }
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableIntStateOf(0) }
     var currentUri by remember(project.treeUri) { mutableStateOf(project.treeUri) }
@@ -67,6 +69,7 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
     var deleteEntry by remember { mutableStateOf<WorkspaceEntry?>(null) }
     var editorText by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var runOutput by remember { mutableStateOf<String?>(null) }
     val entries by produceState(initialValue = emptyList(), currentUri, refresh) {
         value = withContext(Dispatchers.IO) { runCatching { repository.list(currentUri) }.getOrElse { error = it.message; emptyList() } }
     }
@@ -120,7 +123,7 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
     }
 
     createKind?.let { kind ->
-        var name by remember(kind) { mutableStateOf(if (kind == "file") "new_file.txt" else "new_folder") }
+        var name by remember(kind) { mutableStateOf(if (kind == "file") "main.py" else "new_folder") }
         AlertDialog(
             onDismissRequest = { createKind = null },
             title = { Text(if (kind == "file") "Новый файл" else "Новая папка") },
@@ -136,16 +139,31 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
             onDismissRequest = { selected = null },
             title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             text = { OutlinedTextField(editorText, { editorText = it }, modifier = Modifier.fillMaxWidth(), minLines = 12, maxLines = 20, textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) },
-            confirmButton = { Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.updateText(file.uri, editorText) } }.onSuccess { selected = null; refresh++ }.onFailure { error = it.message } } }) { Text("Сохранить") } },
+            confirmButton = {
+                Row {
+                    if (file.name.endsWith(".py", ignoreCase = true)) TextButton(onClick = {
+                        val relativePath = (path.drop(1).map { it.first } + file.name).joinToString("/")
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { repository.updateText(file.uri, editorText); pythonRuntime.run(project.treeUri, relativePath) } }
+                                .onSuccess { runOutput = it; refresh++ }.onFailure { error = it.message }
+                        }
+                    }) { Icon(PhIcons.Send, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("Run") }
+                    Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.updateText(file.uri, editorText) } }.onSuccess { selected = null; refresh++ }.onFailure { error = it.message } } }) { Text("Сохранить") }
+                }
+            },
             dismissButton = { TextButton(onClick = { selected = null }) { Text("Закрыть") } }
         )
     }
     renameEntry?.let { entry ->
         var name by remember(entry.uri) { mutableStateOf(entry.name) }
-        AlertDialog(onDismissRequest = { renameEntry = null }, title = { Text("Переименовать") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Новое название") }, singleLine = true) }, confirmButton = { Button(enabled = name.isNotBlank(), onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.rename(entry.uri, name) } }.onSuccess { renameEntry = null; refresh++ }.onFailure { error = it.message } } }) { Text("Сохранить") } }, dismissButton = { TextButton(onClick = { renameEntry = null }) { Text("Отмена") } })
+        AlertDialog(onDismissRequest = { renameEntry = null }, title = { Text("Переименовать") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Новое название") }, singleLine = true) }, confirmButton = { Button(enabled = name.isNotBlank(), onClick = {
+            val relativePath = (path.drop(1).map { it.first } + entry.name).joinToString("/")
+            scope.launch { runCatching { withContext(Dispatchers.IO) { require(repository.renameRelative(project.treeUri, relativePath, name)) { "Переименование не поддерживается этой папкой Android" } } }.onSuccess { renameEntry = null; refresh++ }.onFailure { error = it.message } }
+        }) { Text("Сохранить") } }, dismissButton = { TextButton(onClick = { renameEntry = null }) { Text("Отмена") } })
     }
     deleteEntry?.let { entry ->
-        AlertDialog(onDismissRequest = { deleteEntry = null }, title = { Text(if (entry.isDirectory) "Удалить папку?" else "Удалить файл?") }, text = { Text("«${entry.name}» будет удалён без возможности восстановления.") }, confirmButton = { TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repository.delete(entry.uri) } }.onSuccess { deleteEntry = null; refresh++ }.onFailure { error = it.message } } }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleteEntry = null }) { Text("Отмена") } })
+        AlertDialog(onDismissRequest = { deleteEntry = null }, title = { Text(if (entry.isDirectory) "Удалить папку?" else "Удалить файл?") }, text = { Text("«${entry.name}» будет удалён без возможности восстановления.") }, confirmButton = { TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { require(repository.delete(entry.uri)) { "Android не разрешил удалить этот объект" } } }.onSuccess { deleteEntry = null; refresh++ }.onFailure { error = it.message } } }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deleteEntry = null }) { Text("Отмена") } })
     }
+    runOutput?.let { output -> AlertDialog(onDismissRequest = { runOutput = null }, title = { Text("Результат Python") }, text = { Text(output, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }, confirmButton = { TextButton(onClick = { runOutput = null }) { Text("Готово") } }) }
     error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("Ошибка доступа") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("Понятно") } }) }
 }

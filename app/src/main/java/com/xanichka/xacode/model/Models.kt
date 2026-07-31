@@ -64,7 +64,6 @@ data class AppSettings(
     val projects: List<ProjectWorkspace> = emptyList(),
     val permissionOnboardingDone: Boolean = false,
     val agentFileToolsEnabled: Boolean = true,
-    val confirmDestructiveActions: Boolean = true,
     val autoVerifyChanges: Boolean = true,
     val animationsEnabled: Boolean = true
 ) {

@@ -185,7 +185,7 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.6.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.7.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
@@ -445,8 +445,6 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         item { SettingsSection("ФАЙЛЫ ПРОЕКТА") {
             ToggleRow("Файловые инструменты", "Чтение, запись, поиск, создание и переименование", settings.agentFileToolsEnabled) { onChange(settings.copy(agentFileToolsEnabled = it)) }
             HorizontalDivider(Modifier.padding(start = 16.dp))
-            ToggleRow("Подтверждать удаление", "Спрашивать перед необратимыми действиями", settings.confirmDestructiveActions) { onChange(settings.copy(confirmDestructiveActions = it)) }
-            HorizontalDivider(Modifier.padding(start = 16.dp))
             ToggleRow("Проверять изменения", "После работы перечитать изменённые файлы", settings.autoVerifyChanges) { onChange(settings.copy(autoVerifyChanges = it)) }
         } }
         item { SettingsSection("ДОСТУПНЫЕ ИНСТРУМЕНТЫ") {
@@ -461,7 +459,7 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         item { SettingsSection("СРЕДА ANDROID") {
             InfoRow(PhIcons.Check, "Файловый агент", "Работает через доступ Android к выбранной папке")
             HorizontalDivider(Modifier.padding(start = 58.dp))
-            InfoRow(PhIcons.FileCode, "Python", "Нужен отдельный встроенный runtime (Chaquopy)")
+            InfoRow(PhIcons.FileCode, "Python 3.13", "Встроен: запуск .py и синхронизация результатов")
             HorizontalDivider(Modifier.padding(start = 58.dp))
             InfoRow(PhIcons.Cpu, "Node.js и npm", "Нужен runtime или мост с Termux")
         } }

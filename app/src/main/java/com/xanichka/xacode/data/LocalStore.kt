@@ -83,7 +83,6 @@ class LocalStore(context: Context) {
             projects = projects,
             permissionOnboardingDone = preferences.getBoolean("permissionOnboardingDone", false),
             agentFileToolsEnabled = preferences.getBoolean("agentFileToolsEnabled", true),
-            confirmDestructiveActions = preferences.getBoolean("confirmDestructiveActions", true),
             autoVerifyChanges = preferences.getBoolean("autoVerifyChanges", true),
             animationsEnabled = preferences.getBoolean("animationsEnabled", true)
         )
@@ -126,7 +125,6 @@ class LocalStore(context: Context) {
             .putString("projects", projectsJson.toString())
             .putBoolean("permissionOnboardingDone", value.permissionOnboardingDone)
             .putBoolean("agentFileToolsEnabled", value.agentFileToolsEnabled)
-            .putBoolean("confirmDestructiveActions", value.confirmDestructiveActions)
             .putBoolean("autoVerifyChanges", value.autoVerifyChanges)
             .putBoolean("animationsEnabled", value.animationsEnabled)
             .remove("endpoint")
