@@ -1,11 +1,12 @@
 package com.xanichka.xacode.data
 
 import android.content.Context
+import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.Conversation
-import com.xanichka.xacode.model.CreationMode
 import com.xanichka.xacode.model.MessageRole
-import com.xanichka.xacode.model.ProviderSettings
+import com.xanichka.xacode.model.ModelProfile
+import com.xanichka.xacode.model.ProviderType
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -13,23 +14,84 @@ class LocalStore(context: Context) {
     private val preferences = context.getSharedPreferences("xacode", Context.MODE_PRIVATE)
     private val secrets = SecretStore(context)
 
-    fun loadSettings() = ProviderSettings(
-        endpoint = preferences.getString("endpoint", null)
-            ?: "https://api.openai.com/v1/chat/completions",
-        apiKey = secrets.readApiKey(),
-        model = preferences.getString("model", "gpt-4.1-mini").orEmpty()
-    )
+    fun loadSettings(): AppSettings {
+        val profiles = runCatching {
+            val raw = preferences.getString("modelProfiles", null)
+            if (raw.isNullOrBlank()) return@runCatching emptyList()
+            val array = JSONArray(raw)
+            (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+                val id = item.getString("id")
+                ModelProfile(
+                    id = id,
+                    name = item.optString("name", "Модель"),
+                    provider = runCatching { ProviderType.valueOf(item.optString("provider")) }
+                        .getOrDefault(ProviderType.CUSTOM),
+                    apiKey = secrets.readApiKey(id),
+                    baseUrl = item.optString("baseUrl"),
+                    model = item.optString("model"),
+                    maxContextTokens = item.optInt("maxContextTokens", 32_000).coerceAtLeast(1_024),
+                    showReasoning = item.optBoolean("showReasoning", false),
+                    reasoningEffort = item.optString("reasoningEffort", "high")
+                )
+            }
+        }.getOrDefault(emptyList()).ifEmpty {
+            val endpoint = preferences.getString("endpoint", null)
+            val model = preferences.getString("model", null)
+            listOf(
+                ModelProfile(
+                    id = "deepseek-default",
+                    name = if (endpoint != null) "Основная модель" else "DeepSeek",
+                    provider = if (endpoint != null) ProviderType.CUSTOM else ProviderType.DEEPSEEK,
+                    apiKey = secrets.readApiKey("deepseek-default"),
+                    baseUrl = endpoint ?: "https://api.deepseek.com",
+                    model = model ?: "deepseek-chat"
+                )
+            )
+        }
+        val requestedActive = preferences.getString("activeProfileId", profiles.first().id).orEmpty()
+        val activeId = requestedActive.takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id
+        return AppSettings(
+            activeProfileId = activeId,
+            profiles = profiles,
+            customInstructionsEnabled = preferences.getBoolean("customInstructionsEnabled", false),
+            customInstructions = preferences.getString("customInstructions", "").orEmpty(),
+            temperatureEnabled = preferences.getBoolean("temperatureEnabled", false),
+            temperature = preferences.getFloat("temperature", 0.7f).coerceIn(0f, 2f)
+        )
+    }
 
-    fun saveSettings(value: ProviderSettings) {
-        secrets.writeApiKey(value.apiKey.trim())
+    fun saveSettings(value: AppSettings) {
+        val profilesJson = JSONArray()
+        value.profiles.forEach { profile ->
+            secrets.writeApiKey(profile.id, profile.apiKey.trim())
+            profilesJson.put(JSONObject().apply {
+                put("id", profile.id)
+                put("name", profile.name.trim())
+                put("provider", profile.provider.name)
+                put("baseUrl", profile.baseUrl.trim())
+                put("model", profile.model.trim())
+                put("maxContextTokens", profile.maxContextTokens)
+                put("showReasoning", profile.showReasoning)
+                put("reasoningEffort", profile.reasoningEffort)
+            })
+        }
         preferences.edit()
-            .putString("endpoint", value.endpoint.trim())
-            .putString("model", value.model.trim())
+            .putString("activeProfileId", value.activeProfileId)
+            .putString("modelProfiles", profilesJson.toString())
+            .putBoolean("customInstructionsEnabled", value.customInstructionsEnabled)
+            .putString("customInstructions", value.customInstructions.trim())
+            .putBoolean("temperatureEnabled", value.temperatureEnabled)
+            .putFloat("temperature", value.temperature.coerceIn(0f, 2f))
+            .remove("endpoint")
+            .remove("model")
             .remove("apiKey")
             .apply()
     }
 
-    fun loadConversations(): List<Conversation> = runCatching {
+    fun deleteProfileSecret(profileId: String) = secrets.deleteApiKey(profileId)
+
+    fun loadConversations(defaultProfileId: String): List<Conversation> = runCatching {
         val array = JSONArray(preferences.getString("conversations", "[]"))
         (0 until array.length()).map { index ->
             val item = array.getJSONObject(index)
@@ -46,8 +108,7 @@ class LocalStore(context: Context) {
             Conversation(
                 id = item.getString("id"),
                 title = item.optString("title", "Новый чат"),
-                mode = runCatching { CreationMode.valueOf(item.optString("mode")) }
-                    .getOrDefault(CreationMode.CHAT),
+                modelProfileId = item.optString("modelProfileId", defaultProfileId),
                 messages = messages,
                 updatedAt = item.optLong("updatedAt", 0L)
             )
@@ -56,7 +117,7 @@ class LocalStore(context: Context) {
 
     fun saveConversations(items: List<Conversation>) {
         val array = JSONArray()
-        items.forEach { conversation ->
+        items.filter { it.messages.isNotEmpty() }.take(100).forEach { conversation ->
             val messages = JSONArray()
             conversation.messages.forEach { message ->
                 messages.put(JSONObject().apply {
@@ -69,7 +130,7 @@ class LocalStore(context: Context) {
             array.put(JSONObject().apply {
                 put("id", conversation.id)
                 put("title", conversation.title)
-                put("mode", conversation.mode.name)
+                put("modelProfileId", conversation.modelProfileId)
                 put("updatedAt", conversation.updatedAt)
                 put("messages", messages)
             })

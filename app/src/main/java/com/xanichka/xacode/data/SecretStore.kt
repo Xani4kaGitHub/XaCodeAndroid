@@ -14,23 +14,30 @@ import javax.crypto.spec.GCMParameterSpec
 class SecretStore(context: Context) {
     private val preferences = context.getSharedPreferences("xacode_secrets", Context.MODE_PRIVATE)
 
-    fun writeApiKey(value: String) {
+    fun writeApiKey(profileId: String, value: String) {
+        val valueName = "apiKey:$profileId"
+        val ivName = "apiKeyIv:$profileId"
         if (value.isBlank()) {
-            preferences.edit().clear().apply()
+            preferences.edit().remove(valueName).remove(ivName).apply()
             return
         }
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
         preferences.edit()
-            .putString("apiKey", Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .putString("apiKeyIv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(valueName, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+            .putString(ivName, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .apply()
     }
 
-    fun readApiKey(): String = runCatching {
-        val encrypted = preferences.getString("apiKey", null) ?: return@runCatching ""
-        val iv = preferences.getString("apiKeyIv", null) ?: return@runCatching ""
+    fun readApiKey(profileId: String): String {
+        val useLegacy = profileId == "deepseek-default" &&
+            !preferences.contains("apiKey:$profileId") && preferences.contains("apiKey")
+        val valueName = if (useLegacy) "apiKey" else "apiKey:$profileId"
+        val ivName = if (useLegacy) "apiKeyIv" else "apiKeyIv:$profileId"
+        val value = runCatching {
+        val encrypted = preferences.getString(valueName, null) ?: return@runCatching ""
+        val iv = preferences.getString(ivName, null) ?: return@runCatching ""
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(
             Cipher.DECRYPT_MODE,
@@ -38,10 +45,18 @@ class SecretStore(context: Context) {
             GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP))
         )
         cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP)).toString(Charsets.UTF_8)
-    }.getOrElse {
-        preferences.edit().clear().apply()
+        }.getOrElse {
+        preferences.edit().remove("apiKey:$profileId").remove("apiKeyIv:$profileId").apply()
         ""
+        }
+        if (useLegacy && value.isNotBlank()) {
+            writeApiKey(profileId, value)
+            preferences.edit().remove("apiKey").remove("apiKeyIv").apply()
+        }
+        return value
     }
+
+    fun deleteApiKey(profileId: String) = writeApiKey(profileId, "")
 
     private fun getOrCreateKey(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
