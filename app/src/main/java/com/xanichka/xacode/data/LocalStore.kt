@@ -149,6 +149,10 @@ class LocalStore(context: Context) {
                     role = MessageRole.valueOf(message.getString("role")),
                     text = message.getString("text"),
                     context = message.optString("context", ""),
+                    inputTokens = message.optInt("inputTokens", 0),
+                    outputTokens = message.optInt("outputTokens", 0),
+                    toolCalls = message.optInt("toolCalls", 0),
+                    elapsedMs = message.optLong("elapsedMs", 0L),
                     createdAt = message.optLong("createdAt", 0L)
                 )
             }
@@ -173,6 +177,10 @@ class LocalStore(context: Context) {
                     put("role", message.role.name)
                     put("text", message.text)
                     put("context", message.context)
+                    put("inputTokens", message.inputTokens)
+                    put("outputTokens", message.outputTokens)
+                    put("toolCalls", message.toolCalls)
+                    put("elapsedMs", message.elapsedMs)
                     put("createdAt", message.createdAt)
                 })
             }

@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xanichka.xacode.data.AiClient
 import com.xanichka.xacode.data.AgentToolExecutor
+import com.xanichka.xacode.data.AiResult
+import com.xanichka.xacode.data.AgentProgress
 import com.xanichka.xacode.data.LocalStore
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.AppSettings
@@ -26,6 +28,7 @@ data class AppUiState(
     val activeProjectId: String? = null,
     val settings: AppSettings = AppSettings(),
     val isSending: Boolean = false,
+    val agentProgress: AgentProgress = AgentProgress(),
     val testingProfileId: String? = null,
     val connectionResult: String? = null,
     val error: String? = null
@@ -189,7 +192,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             existing.copy(messages = existing.messages + userMessage, updatedAt = System.currentTimeMillis())
         }
         val updated = listOf(conversation) + snapshot.conversations.filterNot { it.id == conversation.id }
-        _state.update { it.copy(conversations = updated, activeId = conversation.id, isSending = true, error = null) }
+        _state.update { it.copy(conversations = updated, activeId = conversation.id, isSending = true, agentProgress = AgentProgress(), error = null) }
         viewModelScope.launch(persistenceDispatcher) { store.saveConversations(updated) }
 
         viewModelScope.launch {
@@ -214,28 +217,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val tools = project?.takeIf { currentSettings.agentFileToolsEnabled }?.let {
                         AgentToolExecutor(workspace, it.treeUri, currentSettings.confirmDestructiveActions)
                     }
-                    client.complete(currentSettings, profile, messages, tools)
+                    client.complete(currentSettings, profile, messages, tools) { progress -> _state.update { it.copy(agentProgress = progress) } }
                 }
             }.onSuccess { answer -> appendAssistant(conversation.id, answer) }
                 .onFailure { throwable ->
-                    _state.update { it.copy(isSending = false, error = throwable.message ?: "Не удалось получить ответ") }
+                    _state.update { it.copy(isSending = false, agentProgress = AgentProgress(), error = throwable.message ?: "Не удалось получить ответ") }
                 }
         }
     }
 
-    private fun appendAssistant(conversationId: String, answer: String) {
+    private fun appendAssistant(conversationId: String, answer: AiResult) {
         var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
             val updated = current.conversations.map { conversation ->
                 if (conversation.id == conversationId) {
                     conversation.copy(
-                        messages = conversation.messages + ChatMessage(role = MessageRole.ASSISTANT, text = answer),
+                        messages = conversation.messages + ChatMessage(
+                            role = MessageRole.ASSISTANT,
+                            text = answer.text,
+                            inputTokens = answer.inputTokens,
+                            outputTokens = answer.outputTokens,
+                            toolCalls = answer.toolCalls,
+                            elapsedMs = answer.elapsedMs
+                        ),
                         updatedAt = System.currentTimeMillis()
                     )
                 } else conversation
             }.sortedByDescending { it.updatedAt }
             conversationsToSave = updated
-            current.copy(conversations = updated, isSending = false)
+            current.copy(conversations = updated, isSending = false, agentProgress = AgentProgress())
         }
         viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
     }

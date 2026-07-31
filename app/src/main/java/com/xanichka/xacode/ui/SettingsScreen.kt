@@ -185,7 +185,7 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.5.1", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.6.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
@@ -452,9 +452,18 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         item { SettingsSection("ДОСТУПНЫЕ ИНСТРУМЕНТЫ") {
             InfoRow(PhIcons.FileCode, "read_file · write_file · edit_file", "Чтение и изменение кода")
             HorizontalDivider(Modifier.padding(start = 58.dp))
-            InfoRow(PhIcons.Search, "list_directory · search_code", "Навигация и поиск")
+            InfoRow(PhIcons.Search, "list · find · search · inspect", "Навигация и анализ проекта")
             HorizontalDivider(Modifier.padding(start = 58.dp))
             InfoRow(PhIcons.Folders, "create · rename · delete", "Управление файлами и папками")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Sliders, "apply_patch · undo · todos", "Правки, откат и план работы")
+        } }
+        item { SettingsSection("СРЕДА ANDROID") {
+            InfoRow(PhIcons.Check, "Файловый агент", "Работает через доступ Android к выбранной папке")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.FileCode, "Python", "Нужен отдельный встроенный runtime (Chaquopy)")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Cpu, "Node.js и npm", "Нужен runtime или мост с Termux")
         } }
     }
 }

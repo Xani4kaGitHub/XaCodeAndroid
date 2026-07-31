@@ -1,5 +1,6 @@
 *.iml
 .gradle/
+.gradle-user/
 .idea/
 .kotlin/
 local.properties
@@ -10,4 +11,3 @@ captures/
 .cxx/
 .reference-XaCodeApp/
 .tools/
-

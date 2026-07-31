@@ -10,8 +10,11 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+data class AiResult(val text: String, val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0)
+data class AgentProgress(val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val currentTool: String = "")
+
 class AiClient {
-    fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null): String {
+    fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null, onProgress: (AgentProgress) -> Unit = {}): AiResult {
         require(profile.baseUrl.startsWith("https://") || profile.baseUrl.startsWith("http://")) {
             "Укажите полный адрес API в настройках модели"
         }
@@ -19,10 +22,14 @@ class AiClient {
         val systemPrompt = buildString {
             append("Ты XaCode — самостоятельный AI-агент для разработки и обычных вопросов. ")
             append("Сам определи намерение пользователя: ответить, написать код, спроектировать приложение или создать бота. ")
+            append("Ты работаешь внутри нативного Android-приложения XaCode, а не на Windows или обычном ПК. Не упоминай PowerShell и пути C:\\, если пользователь сам их не дал. ")
             append("Не проси выбирать режим. Давай практичный результат на языке пользователя.")
             if (tools != null) {
-                append("\nУ тебя есть инструменты файлов проекта. Сначала изучи структуру и нужные файлы, затем вноси изменения небольшими шагами. Не выдумывай содержимое файлов.")
+                append("\nТекущий чат привязан к папке проекта. У тебя реально есть Android-инструменты inspect_workspace, list_directory, read_file, write_file, edit_file, find_files, file_info, search_code, create_directory, rename_file, delete_file, apply_patch, undo_file и manage_todos. ")
+                append("Если пользователь просит создать или изменить проект, ОБЯЗАТЕЛЬНО вызывай инструменты, а не просто печатай код в ответе. Сначала изучи структуру и нужные файлы, затем вноси изменения небольшими шагами. Не выдумывай содержимое файлов.")
                 if (settings.autoVerifyChanges) append(" После записи перечитай важные изменённые файлы и проверь результат перед финальным ответом.")
+            } else {
+                append("\nЭтот чат не привязан к проекту, поэтому файловых инструментов здесь нет. Чтобы работать с файлами, предложи пользователю открыть или создать проект в боковом меню.")
             }
             if (settings.customInstructionsEnabled && settings.customInstructions.isNotBlank()) {
                 append("\n\nПользовательские инструкции:\n")
@@ -30,9 +37,9 @@ class AiClient {
             }
         }
         return if (usesAnthropicFormat(profile)) {
-            completeAnthropic(settings, profile, systemPrompt, messages, tools)
+            completeAnthropic(settings, profile, systemPrompt, messages, tools, onProgress)
         } else {
-            completeOpenAi(settings, profile, systemPrompt, messages, tools)
+            completeOpenAi(settings, profile, systemPrompt, messages, tools, onProgress)
         }
     }
 
@@ -40,15 +47,20 @@ class AiClient {
         settings,
         profile,
         listOf(ChatMessage(role = MessageRole.USER, text = "Ответь одним словом: OK"))
-    )
+    ).text
 
     private fun completeOpenAi(
         settings: AppSettings,
         profile: ModelProfile,
         systemPrompt: String,
         messages: List<ChatMessage>,
-        tools: AgentToolExecutor?
-    ): String {
+        tools: AgentToolExecutor?,
+        onProgress: (AgentProgress) -> Unit
+    ): AiResult {
+        val startedAt = System.currentTimeMillis()
+        var totalInputTokens = 0
+        var totalOutputTokens = 0
+        var totalToolCalls = 0
         val bodyMessages = JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt))
         messages.forEach { message ->
             bodyMessages.put(JSONObject().apply {
@@ -83,16 +95,22 @@ class AiClient {
             }
         repeat(8) {
             val response = request(openAiEndpoint(profile.baseUrl), headers, payload)
-            val message = JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+            val root = JSONObject(response)
+            val usage = root.optJSONObject("usage")
+            totalInputTokens += usage?.optInt("prompt_tokens", 0) ?: 0
+            totalOutputTokens += usage?.optInt("completion_tokens", 0) ?: 0
+            val message = root.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val calls = message.optJSONArray("tool_calls")
-            if (tools == null || calls == null || calls.length() == 0) return message.optString("content").trim()
+            if (tools == null || calls == null || calls.length() == 0) return AiResult(message.optString("content").trim(), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+            totalToolCalls += calls.length()
+            onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, calls.getJSONObject(0).getJSONObject("function").optString("name")))
             bodyMessages.put(message)
             for (index in 0 until calls.length()) {
                 val call = calls.getJSONObject(index); val function = call.getJSONObject("function")
                 bodyMessages.put(JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content", tools.execute(function.getString("name"), function.optString("arguments", "{}"))))
             }
         }
-        return "Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта."
+        return AiResult("Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта.", totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
     }
 
     private fun completeAnthropic(
@@ -100,8 +118,13 @@ class AiClient {
         profile: ModelProfile,
         systemPrompt: String,
         messages: List<ChatMessage>,
-        tools: AgentToolExecutor?
-    ): String {
+        tools: AgentToolExecutor?,
+        onProgress: (AgentProgress) -> Unit
+    ): AiResult {
+        val startedAt = System.currentTimeMillis()
+        var totalInputTokens = 0
+        var totalOutputTokens = 0
+        var totalToolCalls = 0
         val bodyMessages = JSONArray()
         messages.forEach { message ->
             bodyMessages.put(JSONObject().apply {
@@ -130,15 +153,21 @@ class AiClient {
             }
         repeat(8) {
             val response = request(anthropicEndpoint(profile.baseUrl), headers, payload)
-            val content = JSONObject(response).optJSONArray("content") ?: JSONArray()
+            val root = JSONObject(response)
+            val usage = root.optJSONObject("usage")
+            totalInputTokens += usage?.optInt("input_tokens", 0) ?: 0
+            totalOutputTokens += usage?.optInt("output_tokens", 0) ?: 0
+            val content = root.optJSONArray("content") ?: JSONArray()
             val toolUses = (0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "tool_use" } }
-            if (tools == null || toolUses.isEmpty()) return (0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim()
+            if (tools == null || toolUses.isEmpty()) return AiResult((0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim(), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+            totalToolCalls += toolUses.size
+            onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolUses.first().optString("name")))
             bodyMessages.put(JSONObject().put("role", "assistant").put("content", content))
             val results = JSONArray()
             toolUses.forEach { use -> results.put(JSONObject().put("type", "tool_result").put("tool_use_id", use.getString("id")).put("content", tools.execute(use.getString("name"), use.optJSONObject("input")?.toString() ?: "{}"))) }
             bodyMessages.put(JSONObject().put("role", "user").put("content", results))
         }
-        return "Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта."
+        return AiResult("Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта.", totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
     }
 
     private fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {

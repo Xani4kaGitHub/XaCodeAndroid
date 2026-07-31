@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -40,6 +42,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,13 +57,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.model.ChatMessage
+import com.xanichka.xacode.data.AgentProgress
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.presetFor
@@ -125,7 +134,7 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
                     items(messages, key = { it.id }) { MessageItem(it) }
-                    if (state.isSending) item { ThinkingIndicator() }
+                    if (state.isSending) item { ThinkingIndicator(state.agentProgress) }
                 }
     }
     Column(modifier.fillMaxSize()) {
@@ -260,7 +269,8 @@ private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, m
         item {
             Column { if (projectName != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(PhIcons.Folders, null, Modifier.size(25.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(projectName, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
-                Text("Чат работает в контексте этой папки", Modifier.padding(top = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                Text("Android-проект · доступно 15 инструментов", Modifier.padding(top = 5.dp), color = XaBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text("XaCode может читать, создавать, менять и удалять файлы этой папки", Modifier.padding(top = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             } else Text("Что будем делать?", fontSize = 25.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)) }
         }
         items(suggestions) { (icon, title) ->
@@ -276,6 +286,7 @@ private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, m
 @Composable
 private fun MessageItem(message: ChatMessage) {
     val isUser = message.role == MessageRole.USER
+    val clipboard = LocalClipboardManager.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         if (!isUser) { BrandLogo(30.dp); Spacer(Modifier.width(10.dp)) }
         Surface(
@@ -284,17 +295,82 @@ private fun MessageItem(message: ChatMessage) {
             modifier = Modifier.fillMaxWidth(if (isUser) .86f else 1f)
         ) {
             Column(Modifier.padding(if (isUser) 13.dp else 4.dp)) {
-                Text(message.text, fontSize = 15.sp, lineHeight = 22.sp, fontFamily = if (message.text.contains("```")) FontFamily.Monospace else FontFamily.Default)
+                if (isUser) Text(message.text, fontSize = 15.sp, lineHeight = 22.sp) else MarkdownText(message.text)
                 if (message.context.isNotBlank()) Text("Файлы прикреплены", Modifier.padding(top = 6.dp), color = XaBlue, fontSize = 11.sp)
+                if (!isUser) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) { Icon(PhIcons.Copy, null, Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text("Копировать", fontSize = 11.sp) }
+                    Spacer(Modifier.weight(1f))
+                    val stats = buildList {
+                        if (message.inputTokens + message.outputTokens > 0) add("${message.inputTokens + message.outputTokens} токенов")
+                        if (message.toolCalls > 0) add("${message.toolCalls} инструментов")
+                        if (message.elapsedMs > 0) add("${"%.1f".format(message.elapsedMs / 1000f)} с")
+                    }.joinToString(" · ")
+                    if (stats.isNotBlank()) Text(stats, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun ThinkingIndicator() {
+private fun MarkdownText(markdown: String) {
+    val parts = markdown.split("```")
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        parts.forEachIndexed { index, part ->
+            if (index % 2 == 1) {
+                val content = part.substringAfter('\n', part).trimEnd()
+                val language = part.substringBefore('\n', "").trim()
+                CodeBlock(language, content)
+            } else part.lines().forEach { line ->
+                when {
+                    line.startsWith("### ") -> Text(inlineMarkdown(line.drop(4)), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    line.startsWith("## ") -> Text(inlineMarkdown(line.drop(3)), fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    line.startsWith("# ") -> Text(inlineMarkdown(line.drop(2)), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    line.startsWith("- ") || line.startsWith("* ") -> Row { Text("•  ", color = XaBlue); Text(inlineMarkdown(line.drop(2)), Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp) }
+                    line.matches(Regex("^\\d+\\. .*")) -> { val marker = line.substringBefore(' ') + " "; Row { Text(marker, color = XaBlue); Text(inlineMarkdown(line.substringAfter(' ')), Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp) } }
+                    line.isBlank() -> Spacer(Modifier.height(3.dp))
+                    else -> Text(inlineMarkdown(line), fontSize = 15.sp, lineHeight = 22.sp)
+                }
+            }
+        }
+    }
+}
+
+private fun inlineMarkdown(text: String) = buildAnnotatedString {
+    val regex = Regex("(\\*\\*.+?\\*\\*|`.+?`)")
+    var cursor = 0
+    regex.findAll(text).forEach { match ->
+        append(text.substring(cursor, match.range.first))
+        val token = match.value
+        if (token.startsWith("**")) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(token.drop(2).dropLast(2)) }
+        else withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = XaBlue, background = androidx.compose.ui.graphics.Color(0x26353143))) { append(token.drop(1).dropLast(1)) }
+        cursor = match.range.last + 1
+    }
+    append(text.substring(cursor))
+}
+
+@Composable
+private fun CodeBlock(language: String, code: String) {
+    val clipboard = LocalClipboardManager.current
+    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Column {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(language.ifBlank { "code" }, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }, contentPadding = PaddingValues(4.dp)) { Icon(PhIcons.Copy, "Копировать код", Modifier.size(15.dp)) }
+            }
+            Text(code, Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp), fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp)
+        }
+    }
+}
+
+@Composable
+private fun ThinkingIndicator(progress: AgentProgress) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         BrandLogo(30.dp); Spacer(Modifier.width(12.dp)); CircularProgressIndicator(Modifier.size(18.dp), color = XaBlue, strokeWidth = 2.dp); Spacer(Modifier.width(9.dp))
-        Text("XaCode думает…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Column {
+            Text(if (progress.currentTool.isBlank()) "XaCode думает…" else "Работает: ${progress.currentTool}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            val details = buildList { if (progress.inputTokens + progress.outputTokens > 0) add("${progress.inputTokens + progress.outputTokens} токенов"); if (progress.toolCalls > 0) add("${progress.toolCalls} инструментов") }.joinToString(" · ")
+            if (details.isNotBlank()) Text(details, color = XaBlue, fontSize = 10.sp)
+        }
     }
 }

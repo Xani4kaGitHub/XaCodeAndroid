@@ -80,6 +80,10 @@ data class ChatMessage(
     val role: MessageRole,
     val text: String,
     val context: String = "",
+    val inputTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val toolCalls: Int = 0,
+    val elapsedMs: Long = 0,
     val createdAt: Long = System.currentTimeMillis()
 )
 
