@@ -57,7 +57,8 @@ class LocalStore(context: Context) {
             customInstructionsEnabled = preferences.getBoolean("customInstructionsEnabled", false),
             customInstructions = preferences.getString("customInstructions", "").orEmpty(),
             temperatureEnabled = preferences.getBoolean("temperatureEnabled", false),
-            temperature = preferences.getFloat("temperature", 0.7f).coerceIn(0f, 2f)
+            temperature = preferences.getFloat("temperature", 0.7f).coerceIn(0f, 2f),
+            workspaceUri = preferences.getString("workspaceUri", "").orEmpty()
         )
     }
 
@@ -83,6 +84,7 @@ class LocalStore(context: Context) {
             .putString("customInstructions", value.customInstructions.trim())
             .putBoolean("temperatureEnabled", value.temperatureEnabled)
             .putFloat("temperature", value.temperature.coerceIn(0f, 2f))
+            .putString("workspaceUri", value.workspaceUri)
             .remove("endpoint")
             .remove("model")
             .remove("apiKey")
@@ -102,6 +104,7 @@ class LocalStore(context: Context) {
                     id = message.getString("id"),
                     role = MessageRole.valueOf(message.getString("role")),
                     text = message.getString("text"),
+                    context = message.optString("context", ""),
                     createdAt = message.optLong("createdAt", 0L)
                 )
             }
@@ -124,6 +127,7 @@ class LocalStore(context: Context) {
                     put("id", message.id)
                     put("role", message.role.name)
                     put("text", message.text)
+                    put("context", message.context)
                     put("createdAt", message.createdAt)
                 })
             }

@@ -35,6 +35,7 @@ data class AppUiState(
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = LocalStore(application)
     private val client = AiClient()
+    private val persistenceDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val initialSettings = store.loadSettings()
     private val _state = MutableStateFlow(
         AppUiState(
@@ -49,15 +50,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun newChat() = _state.update { it.copy(activeId = null, error = null) }
 
     fun selectProfile(id: String) {
+        var settingsToSave: AppSettings? = null
+        var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
             if (current.settings.profiles.none { it.id == id } || current.isSending) return@update current
             val settings = current.settings.copy(activeProfileId = id)
             val conversations = current.conversations.map { conversation ->
                 if (conversation.id == current.activeId) conversation.copy(modelProfileId = id) else conversation
             }
-            store.saveSettings(settings)
-            store.saveConversations(conversations)
+            settingsToSave = settings
+            conversationsToSave = conversations
             current.copy(settings = settings, conversations = conversations)
+        }
+        viewModelScope.launch(persistenceDispatcher) {
+            settingsToSave?.let(store::saveSettings)
+            conversationsToSave?.let(store::saveConversations)
         }
     }
 
@@ -67,18 +74,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ?: settings.profiles.first().id
         val normalized = settings.copy(activeProfileId = normalizedActive)
         val removed = _state.value.settings.profiles.map { it.id }.toSet() - normalized.profiles.map { it.id }.toSet()
-        removed.forEach(store::deleteProfileSecret)
-        store.saveSettings(normalized)
+        var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
             val conversations = current.conversations.map { conversation ->
                 if (normalized.profiles.none { it.id == conversation.modelProfileId }) {
                     conversation.copy(modelProfileId = normalized.activeProfileId)
                 } else conversation
             }
-            store.saveConversations(conversations)
+            conversationsToSave = conversations
             current.copy(settings = normalized, conversations = conversations, connectionResult = null, error = null)
         }
+        viewModelScope.launch(persistenceDispatcher) {
+            removed.forEach(store::deleteProfileSecret)
+            store.saveSettings(normalized)
+            conversationsToSave?.let(store::saveConversations)
+        }
     }
+
+    fun setWorkspaceUri(uri: String) = saveSettings(_state.value.settings.copy(workspaceUri = uri))
 
     fun testProfile(settings: AppSettings, profile: ModelProfile) {
         if (_state.value.testingProfileId != null) return
@@ -97,21 +110,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun clearConnectionResult() = _state.update { it.copy(connectionResult = null) }
 
     fun deleteConversation(id: String) {
+        var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
             val updated = current.conversations.filterNot { it.id == id }
-            store.saveConversations(updated)
+            conversationsToSave = updated
             current.copy(conversations = updated, activeId = if (current.activeId == id) null else current.activeId)
         }
+        viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
     }
 
     fun dismissError() = _state.update { it.copy(error = null) }
 
-    fun send(text: String) {
+    fun send(text: String, context: String = "") {
         val prompt = text.trim()
         if (prompt.isEmpty() || _state.value.isSending) return
         val snapshot = _state.value
         val existing = snapshot.activeConversation
-        val userMessage = ChatMessage(role = MessageRole.USER, text = prompt)
+        val userMessage = ChatMessage(role = MessageRole.USER, text = prompt, context = context)
         val conversation = if (existing == null) {
             Conversation(
                 title = prompt.replace('\n', ' ').take(42),
@@ -122,8 +137,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             existing.copy(messages = existing.messages + userMessage, updatedAt = System.currentTimeMillis())
         }
         val updated = listOf(conversation) + snapshot.conversations.filterNot { it.id == conversation.id }
-        store.saveConversations(updated)
         _state.update { it.copy(conversations = updated, activeId = conversation.id, isSending = true, error = null) }
+        viewModelScope.launch(persistenceDispatcher) { store.saveConversations(updated) }
 
         viewModelScope.launch {
             val currentSettings = _state.value.settings
@@ -139,6 +154,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun appendAssistant(conversationId: String, answer: String) {
+        var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
             val updated = current.conversations.map { conversation ->
                 if (conversation.id == conversationId) {
@@ -148,8 +164,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 } else conversation
             }.sortedByDescending { it.updatedAt }
-            store.saveConversations(updated)
+            conversationsToSave = updated
             current.copy(conversations = updated, isSending = false)
         }
+        viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
     }
 }

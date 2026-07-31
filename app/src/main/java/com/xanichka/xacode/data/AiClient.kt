@@ -48,7 +48,7 @@ class AiClient {
         messages.forEach { message ->
             bodyMessages.put(JSONObject().apply {
                 put("role", if (message.role == MessageRole.USER) "user" else "assistant")
-                put("content", message.text)
+                put("content", message.text + message.context.takeIf { it.isNotBlank() }?.let { "\n\nКонтекст из файлов:\n$it" }.orEmpty())
             })
         }
         val payload = JSONObject().put("messages", bodyMessages)
@@ -93,7 +93,7 @@ class AiClient {
         messages.forEach { message ->
             bodyMessages.put(JSONObject().apply {
                 put("role", if (message.role == MessageRole.USER) "user" else "assistant")
-                put("content", message.text)
+                put("content", message.text + message.context.takeIf { it.isNotBlank() }?.let { "\n\nКонтекст из файлов:\n$it" }.orEmpty())
             })
         }
         val payload = JSONObject()

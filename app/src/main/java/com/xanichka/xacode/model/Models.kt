@@ -1,9 +1,11 @@
 package com.xanichka.xacode.model
 
+import androidx.compose.runtime.Immutable
 import java.util.UUID
 
 enum class ProviderType { DEEPSEEK, OPENAI, ANTHROPIC, GOOGLE, OPENROUTER, AGENTROUTER, OLLAMA, CUSTOM }
 
+@Immutable
 data class ProviderPreset(
     val type: ProviderType,
     val label: String,
@@ -27,6 +29,7 @@ val providerPresets = listOf(
 
 fun presetFor(type: ProviderType) = providerPresets.first { it.type == type }
 
+@Immutable
 data class ModelProfile(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "DeepSeek",
@@ -39,13 +42,15 @@ data class ModelProfile(
     val reasoningEffort: String = "high"
 )
 
+@Immutable
 data class AppSettings(
     val activeProfileId: String = "deepseek-default",
     val profiles: List<ModelProfile> = listOf(ModelProfile(id = "deepseek-default")),
     val customInstructionsEnabled: Boolean = false,
     val customInstructions: String = "",
     val temperatureEnabled: Boolean = false,
-    val temperature: Float = 0.7f
+    val temperature: Float = 0.7f,
+    val workspaceUri: String = ""
 ) {
     val activeProfile: ModelProfile
         get() = profiles.firstOrNull { it.id == activeProfileId } ?: profiles.first()
@@ -53,13 +58,16 @@ data class AppSettings(
 
 enum class MessageRole { USER, ASSISTANT }
 
+@Immutable
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: MessageRole,
     val text: String,
+    val context: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Immutable
 data class Conversation(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "Новый чат",
@@ -67,4 +75,3 @@ data class Conversation(
     val messages: List<ChatMessage> = emptyList(),
     val updatedAt: Long = System.currentTimeMillis()
 )
-
