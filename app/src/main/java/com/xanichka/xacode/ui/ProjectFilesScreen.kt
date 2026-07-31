@@ -55,20 +55,24 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
     val repository = remember(context) { WorkspaceRepository(context) }
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableIntStateOf(0) }
+    var currentUri by remember(project.treeUri) { mutableStateOf(project.treeUri) }
+    var path by remember(project.id) { mutableStateOf(listOf(project.name to project.treeUri)) }
     var createKind by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<WorkspaceEntry?>(null) }
     var editorText by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    val entries by produceState(initialValue = emptyList(), project.treeUri, refresh) {
-        value = withContext(Dispatchers.IO) { runCatching { repository.list(project.treeUri) }.getOrElse { error = it.message; emptyList() } }
+    val entries by produceState(initialValue = emptyList(), currentUri, refresh) {
+        value = withContext(Dispatchers.IO) { runCatching { repository.list(currentUri) }.getOrElse { error = it.message; emptyList() } }
     }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleIconButton(PhIcons.Back, "Назад", onBack)
+            CircleIconButton(PhIcons.Back, "Назад", onClick = {
+                if (path.size > 1) { path = path.dropLast(1); currentUri = path.last().second } else onBack()
+            })
             Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                 Text(project.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Файлы проекта", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text(path.joinToString(" / ") { it.first }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             CircleIconButton(PhIcons.Plus, "Создать файл", onClick = { createKind = "file" })
         }
@@ -85,8 +89,9 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
             }
             items(entries, key = { it.uri }) { entry ->
                 Card(
-                    Modifier.fillMaxWidth().clickable(enabled = !entry.isDirectory) {
-                        scope.launch { runCatching { withContext(Dispatchers.IO) { repository.readText(entry.uri) } }.onSuccess { editorText = it; selected = entry }.onFailure { error = it.message } }
+                    Modifier.fillMaxWidth().clickable {
+                        if (entry.isDirectory) { path = path + (entry.name to entry.uri); currentUri = entry.uri }
+                        else scope.launch { runCatching { withContext(Dispatchers.IO) { repository.readText(entry.uri) } }.onSuccess { editorText = it; selected = entry }.onFailure { error = it.message } }
                     },
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -108,7 +113,7 @@ fun ProjectFilesScreen(project: ProjectWorkspace, onBack: () -> Unit) {
             title = { Text(if (kind == "file") "Новый файл" else "Новая папка") },
             text = { OutlinedTextField(name, { name = it }, label = { Text("Название") }, singleLine = true) },
             confirmButton = { Button(onClick = {
-                scope.launch { runCatching { withContext(Dispatchers.IO) { if (kind == "file") repository.writeText(project.treeUri, name, "") else repository.createDirectory(project.treeUri, name) } }.onSuccess { refresh++; createKind = null }.onFailure { error = it.message } }
+                scope.launch { runCatching { withContext(Dispatchers.IO) { if (kind == "file") repository.writeText(currentUri, name, "") else repository.createDirectory(currentUri, name) } }.onSuccess { refresh++; createKind = null }.onFailure { error = it.message } }
             }, enabled = name.isNotBlank()) { Text("Создать") } },
             dismissButton = { TextButton(onClick = { createKind = null }) { Text("Отмена") } }
         )

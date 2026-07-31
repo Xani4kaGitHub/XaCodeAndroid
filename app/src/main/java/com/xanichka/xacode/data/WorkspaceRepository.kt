@@ -13,9 +13,15 @@ data class WorkspaceEntry(
 
 /** Read/write access constrained to the folder explicitly granted through Android SAF. */
 class WorkspaceRepository(private val context: Context) {
+    private fun directory(uri: String): DocumentFile? {
+        val parsed = Uri.parse(uri)
+        return DocumentFile.fromTreeUri(context, parsed)?.takeIf { it.isDirectory }
+            ?: DocumentFile.fromSingleUri(context, parsed)?.takeIf { it.isDirectory }
+    }
+
     fun list(treeUri: String): List<WorkspaceEntry> {
         if (treeUri.isBlank()) return emptyList()
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(treeUri)) ?: return emptyList()
+        val root = directory(treeUri) ?: return emptyList()
         return root.listFiles().map { file ->
             WorkspaceEntry(
                 name = file.name ?: "Без имени",
@@ -40,7 +46,7 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun writeText(parentUri: String, fileName: String, content: String): String {
-        val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri))
+        val parent = directory(parentUri)
             ?: error("Рабочая папка недоступна")
         val file = parent.findFile(fileName) ?: parent.createFile("text/plain", fileName)
             ?: error("Не удалось создать файл")
@@ -55,7 +61,7 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun createDirectory(parentUri: String, name: String): String {
-        val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri))
+        val parent = directory(parentUri)
             ?: error("Рабочая папка недоступна")
         return (parent.findFile(name) ?: parent.createDirectory(name))?.uri?.toString()
             ?: error("Не удалось создать папку")
