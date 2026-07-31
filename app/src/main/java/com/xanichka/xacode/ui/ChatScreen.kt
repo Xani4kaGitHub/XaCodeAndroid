@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.data.AgentProgress
+import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.presetFor
@@ -83,6 +84,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class UiAttachment(val name: String, val content: String)
+private data class PromptCommand(val id: String, val title: String, val hint: String)
+
+private val promptCommands = listOf(
+    PromptCommand("goal", "Цель", "Довести большую задачу до результата"),
+    PromptCommand("plan", "План", "Сначала составить понятный план"),
+    PromptCommand("terminal", "Терминал", "Запустить команду через Termux"),
+    PromptCommand("review", "Ревью", "Проверить код и найти проблемы"),
+    PromptCommand("fix", "Исправить", "Найти причину и исправить ошибку"),
+    PromptCommand("test", "Тесты", "Написать или запустить тесты"),
+    PromptCommand("explain", "Объяснить", "Объяснить код простыми словами"),
+    PromptCommand("learn", "Обучение", "Разобрать тему пошагово"),
+    PromptCommand("btw", "Быстрый вопрос", "Короткий вопрос без смены задачи")
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,10 +111,12 @@ fun ChatScreen(
     var input by rememberSaveable { mutableStateOf("") }
     var showModels by rememberSaveable { mutableStateOf(false) }
     var showTools by rememberSaveable { mutableStateOf(false) }
+    var mentionResults by remember { mutableStateOf<List<String>>(emptyList()) }
     val attachments = remember { mutableStateListOf<UiAttachment>() }
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val workspaceRepository = remember(context) { WorkspaceRepository(context) }
     val messages = state.activeConversation?.messages.orEmpty()
     val listState = rememberLazyListState()
     val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -157,11 +173,46 @@ fun ChatScreen(
                     }
                 }
             }
+            val activeToken = input.substringAfterLast(' ').substringAfterLast('\n')
+            val slashItems = if (activeToken.startsWith('/')) promptCommands.filter { it.id.contains(activeToken.drop(1), true) }.take(6) else emptyList()
+            if (slashItems.isNotEmpty() || (activeToken.startsWith('@') && mentionResults.isNotEmpty())) {
+                PromptSuggestions(
+                    commands = slashItems,
+                    files = if (activeToken.startsWith('@')) mentionResults else emptyList(),
+                    onCommand = { command -> input = replaceActiveToken(input, "/${command.id} ") },
+                    onFile = { path ->
+                        val project = state.activeProject ?: return@PromptSuggestions
+                        scope.launch {
+                            val content = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    val node = workspaceRepository.resolve(project.treeUri, path) ?: error("Путь не найден")
+                                    if (node.isDirectory) workspaceRepository.listRelative(project.treeUri, path).joinToString("\n") { entry ->
+                                        (if (entry.isDirectory) "[DIR] " else "[FILE] ") + "$path/${entry.name}"
+                                    } else workspaceRepository.readRelative(project.treeUri, path)
+                                }.getOrNull()
+                            }
+                            if (content != null) {
+                                attachments.removeAll { it.name == path }
+                                attachments += UiAttachment(path, content)
+                                input = replaceActiveToken(input, "@$path ")
+                            }
+                        }
+                    }
+                )
+            }
             Surface(shape = RoundedCornerShape(27.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .72f))) {
                 Column(Modifier.padding(horizontal = 7.dp, vertical = 6.dp)) {
                     BasicTextField(
                         value = input,
-                        onValueChange = { input = it },
+                        onValueChange = { value ->
+                            input = value
+                            val token = value.substringAfterLast(' ').substringAfterLast('\n')
+                            if (token.startsWith('@') && state.activeProject != null) {
+                                scope.launch {
+                                    mentionResults = withContext(Dispatchers.IO) { workspaceRepository.search(state.activeProject!!.treeUri, token.drop(1), 8) }
+                                }
+                            } else mentionResults = emptyList()
+                        },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                         cursorBrush = SolidColor(XaBlue),
@@ -169,7 +220,7 @@ fun ChatScreen(
                         keyboardActions = KeyboardActions(onSend = {
                             if (input.isNotBlank()) {
                                 val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
-                                onSend(input, fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
+                                onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
                             }
                         }),
                         decorationBox = { inner -> Box { if (input.isBlank()) Text(tr(state.settings.language, "Спроси или создай что-нибудь…", "Запитай або створи щось…", "Ask or create something…"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp); inner() } }
@@ -184,7 +235,7 @@ fun ChatScreen(
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(PhIcons.Sparkle, null, Modifier.size(16.dp), tint = XaBlue)
+                                ProviderBadge(state.currentProfile.provider, 20.dp, selected = true)
                                 Spacer(Modifier.width(6.dp))
                                 Text(state.currentProfile.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                             }
@@ -199,7 +250,7 @@ fun ChatScreen(
                                 enabled = input.isNotBlank() && !state.isSending,
                                 onClick = {
                                     val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
-                                    onSend(input, fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
+                                    onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
                                 }
                             ) {
                                 Icon(PhIcons.Send, tr(state.settings.language, "Отправить", "Надіслати", "Send"), Modifier.size(20.dp), tint = if (input.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -236,6 +287,55 @@ fun ChatScreen(
 }
 
 @Composable
+private fun PromptSuggestions(commands: List<PromptCommand>, files: List<String>, onCommand: (PromptCommand) -> Unit, onFile: (String) -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 7.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .55f))
+    ) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            commands.forEach { command ->
+                Row(Modifier.fillMaxWidth().clickable { onCommand(command) }.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = RoundedCornerShape(8.dp), color = XaBlue.copy(alpha = .13f)) { Text("/${command.id}", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = XaBlue, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                    Spacer(Modifier.width(10.dp)); Column { Text(command.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp); Text(command.hint, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp) }
+                }
+            }
+            files.forEach { path ->
+                Row(Modifier.fillMaxWidth().clickable { onFile(path) }.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(PhIcons.FileCode, null, Modifier.size(20.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(path, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+private fun replaceActiveToken(text: String, replacement: String): String {
+    val index = maxOf(text.lastIndexOf(' '), text.lastIndexOf('\n')) + 1
+    return text.take(index) + replacement
+}
+
+private fun expandSlashPrompt(text: String): String {
+    val expansions = mapOf(
+        "goal" to "[GOAL MODE] Продолжай работу до полного результата. Проверяй каждый важный этап.",
+        "plan" to "[PLANNING MODE] Сначала составь краткий план, затем последовательно выполни его.",
+        "terminal" to "[TERMINAL TASK] Используй run_command через Termux, когда нужно выполнить или проверить код.",
+        "review" to "[CODE REVIEW] Проверь код на ошибки, безопасность, производительность и удобство поддержки.",
+        "fix" to "[FIX] Найди первопричину проблемы, исправь её и проверь результат.",
+        "test" to "[TEST] Создай или запусти подходящие тесты и сообщи реальные результаты.",
+        "explain" to "[EXPLAIN] Объясни решение понятными словами и с короткими примерами.",
+        "learn" to "[LEARN] Обучай пошагово, проверяя понимание на небольших примерах.",
+        "btw" to "[QUICK SIDE QUESTION] Ответь коротко, не меняя основную задачу."
+    )
+    var result = text.trim()
+    expansions.forEach { (command, instruction) ->
+        val regex = Regex("(^|\\s)/${Regex.escape(command)}(?=\\s|$)")
+        result = result.replace(regex) { match -> "${match.groupValues[1]}$instruction" }
+    }
+    return result
+}
+
+@Composable
 private fun ToolRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
         Surface(Modifier.size(46.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) { Box(contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(23.dp)) } }
@@ -249,9 +349,7 @@ private fun ModelChoiceRow(profile: ModelProfile, selected: Boolean, onClick: ()
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Surface(shape = RoundedCornerShape(12.dp), color = if (selected) XaBlue.copy(alpha = .18f) else MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(42.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(PhIcons.Robot, null, Modifier.size(22.dp), tint = if (selected) XaBlue else MaterialTheme.colorScheme.onSurface) }
-        }
+        ProviderBadge(profile.provider, selected = selected)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(profile.name, fontWeight = FontWeight.SemiBold)
@@ -368,17 +466,37 @@ private fun MarkdownLines(lines: List<String>) {
 
 @Composable
 private fun MarkdownTable(rows: List<String>) {
+    val clipboard = LocalClipboardManager.current
     val cells = rows.map { row -> row.trim().trim('|').split('|').map { it.trim() } }
-    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-        Column(Modifier.horizontalScroll(rememberScrollState()).padding(6.dp)) {
+    val columns = cells.maxOfOrNull { it.size } ?: 0
+    val widths = (0 until columns).map { column ->
+        val longest = cells.maxOfOrNull { it.getOrNull(column)?.length ?: 0 } ?: 0
+        (longest * 7 + 30).coerceIn(104, 224).dp
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Таблица · ${cells.size}×$columns", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+            TextButton(onClick = { clipboard.setText(AnnotatedString(rows.joinToString("\n"))) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
+                Icon(PhIcons.Copy, "Копировать таблицу", Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Копировать", fontSize = 11.sp)
+            }
+        }
+        Surface(shape = RoundedCornerShape(12.dp), color = Color.Transparent, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .55f))) {
+          Column(Modifier.horizontalScroll(rememberScrollState())) {
             cells.forEachIndexed { rowIndex, row ->
                 Row {
-                    row.forEach { cell ->
-                        Text(inlineMarkdown(cell), Modifier.width(150.dp).padding(horizontal = 9.dp, vertical = 8.dp), fontSize = 12.sp, fontWeight = if (rowIndex == 0) FontWeight.Bold else FontWeight.Normal)
+                    (0 until columns).forEach { column ->
+                        val cell = row.getOrNull(column).orEmpty()
+                        Surface(
+                            modifier = Modifier.width(widths[column]),
+                            color = when { rowIndex == 0 -> XaBlue.copy(alpha = .13f); rowIndex % 2 == 0 -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .38f); else -> Color.Transparent },
+                            border = androidx.compose.foundation.BorderStroke(.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = .32f))
+                        ) {
+                            Text(inlineMarkdown(cell), Modifier.padding(horizontal = 11.dp, vertical = 10.dp), fontSize = 12.sp, lineHeight = 17.sp, fontWeight = if (rowIndex == 0) FontWeight.Bold else FontWeight.Normal)
+                        }
                     }
                 }
-                if (rowIndex == 0) androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .55f))
             }
+          }
         }
     }
 }

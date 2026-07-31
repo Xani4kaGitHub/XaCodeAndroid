@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.provider.DocumentsContract
+import android.net.Uri
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -71,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.data.WorkspaceRepository
+import com.xanichka.xacode.data.TermuxBridge
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
@@ -197,7 +199,7 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         }
         item {
             SettingsSection(tr(settings.language, "AI И РАЗРАБОТКА", "AI ТА РОЗРОБКА", "AI AND DEVELOPMENT")) {
-                SettingsRow(PhIcons.Robot, tr(settings.language, "Модели и API", "Моделі та API", "Models and API"), tr(settings.language, "${settings.profiles.size} подключений", "${settings.profiles.size} підключень", "${settings.profiles.size} connections"), onModels)
+                SettingsRow(PhIcons.Sparkle, tr(settings.language, "Модели и API", "Моделі та API", "Models and API"), tr(settings.language, "${settings.profiles.size} подключений", "${settings.profiles.size} підключень", "${settings.profiles.size} connections"), onModels)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
                 SettingsRow(PhIcons.Sliders, tr(settings.language, "Персонализация", "Персоналізація", "Personalization"), if (settings.customInstructionsEnabled) tr(settings.language, "Свои инструкции включены", "Власні інструкції увімкнено", "Custom instructions enabled") else tr(settings.language, "Стандартное поведение", "Стандартна поведінка", "Default behavior"), onPersonalization)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
@@ -259,7 +261,7 @@ private fun ModelsPage(settings: AppSettings, onSettingsChange: (AppSettings) ->
             ) {
                 Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(shape = RoundedCornerShape(12.dp), color = if (profile.id == settings.activeProfileId) XaBlue.copy(alpha = .18f) else MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(46.dp)) {
-                        Box(contentAlignment = Alignment.Center) { Icon(PhIcons.Robot, null, Modifier.size(24.dp), tint = if (profile.id == settings.activeProfileId) XaBlue else MaterialTheme.colorScheme.onSurface) }
+                        ProviderBadge(profile.provider, selected = profile.id == settings.activeProfileId)
                     }
                     Spacer(Modifier.width(13.dp))
                     Column(Modifier.weight(1f)) {
@@ -456,6 +458,10 @@ private fun PersonalizationPage(settings: AppSettings, onChange: (AppSettings) -
 
 @Composable
 private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+    val context = LocalContext.current
+    var permissionRefresh by remember { mutableStateOf(0) }
+    val termux = remember(context, permissionRefresh) { TermuxBridge(context) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Text("По подходу XaCode Desktop модель получает только включённые инструменты. На Android они работают строго внутри папки проекта.", color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
@@ -471,6 +477,34 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
             ToggleRow(tr(settings.language, "Загрузки из интернета", "Завантаження з інтернету", "Internet downloads"), tr(settings.language, "Только публичные HTTPS-адреса, до 25 МБ", "Лише публічні HTTPS-адреси, до 25 МБ", "Public HTTPS addresses only, up to 25 MB"), settings.networkDownloadsEnabled) { onChange(settings.copy(networkDownloadsEnabled = it)) }
             HorizontalDivider(Modifier.padding(start = 16.dp))
             ToggleRow(tr(settings.language, "Запуск Python агентом", "Запуск Python агентом", "Agent Python execution"), tr(settings.language, "Код выполняется внутри процесса приложения — включайте только для доверенных проектов", "Код виконується в процесі застосунку — вмикайте лише для довірених проєктів", "Code runs inside the app process — enable only for trusted projects"), settings.pythonExecutionEnabled) { onChange(settings.copy(pythonExecutionEnabled = it)) }
+        } }
+        item { SettingsSection("TERMUX · NODE · NPM · GIT") {
+            ToggleRow(
+                "Команды через Termux",
+                "Добавляет агенту run_command для Node.js, npm, git, компиляторов и тестов",
+                settings.termuxExecutionEnabled
+            ) { onChange(settings.copy(termuxExecutionEnabled = it)) }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+            InfoRow(
+                if (termux.isInstalled() && termux.hasPermission()) PhIcons.Check else PhIcons.Cpu,
+                when {
+                    !termux.isInstalled() -> "Termux не установлен"
+                    !termux.hasPermission() -> "Нужно разрешение RUN_COMMAND"
+                    else -> "Termux подключён"
+                },
+                "В Termux задайте allow-external-apps=true и выполните termux-setup-storage"
+            )
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    if (termux.isInstalled()) context.packageManager.getLaunchIntentForPackage(TermuxBridge.TERMUX_PACKAGE)?.let(context::startActivity)
+                    else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/termux/termux-app/releases")))
+                }) { Text(if (termux.isInstalled()) "Открыть Termux" else "Установить Termux") }
+                if (termux.isInstalled() && !termux.hasPermission()) Button(onClick = { permissionLauncher.launch(TermuxBridge.RUN_PERMISSION) }) { Text("Дать доступ") }
+            }
+            Text(
+                "Проект должен быть во внутренней общей памяти. Команды запускаются без root и только после явного включения.",
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp
+            )
         } }
         item { SettingsSection("ДОСТУПНЫЕ ИНСТРУМЕНТЫ") {
             InfoRow(PhIcons.FileCode, "read_file · write_file · edit_file", "Чтение и изменение кода")
@@ -566,7 +600,7 @@ private fun ProviderPicker(selected: ProviderType, onSelected: (ProviderType) ->
     var expanded by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-            Icon(PhIcons.Robot, null); Spacer(Modifier.width(8.dp)); Text(presetFor(selected).label, Modifier.weight(1f)); Icon(PhIcons.Next, null, Modifier.size(17.dp))
+            ProviderBadge(selected, 28.dp); Spacer(Modifier.width(8.dp)); Text(presetFor(selected).label, Modifier.weight(1f)); Icon(PhIcons.Next, null, Modifier.size(17.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             providerPresets.forEach { preset ->

@@ -87,6 +87,7 @@ class LocalStore(context: Context) {
             destructiveToolsEnabled = preferences.getBoolean("destructiveToolsEnabled", false),
             networkDownloadsEnabled = preferences.getBoolean("networkDownloadsEnabled", false),
             pythonExecutionEnabled = preferences.getBoolean("pythonExecutionEnabled", false),
+            termuxExecutionEnabled = preferences.getBoolean("termuxExecutionEnabled", false),
             autoVerifyChanges = preferences.getBoolean("autoVerifyChanges", true),
             animationsEnabled = preferences.getBoolean("animationsEnabled", true),
             language = runCatching {
@@ -135,6 +136,7 @@ class LocalStore(context: Context) {
             .putBoolean("destructiveToolsEnabled", value.destructiveToolsEnabled)
             .putBoolean("networkDownloadsEnabled", value.networkDownloadsEnabled)
             .putBoolean("pythonExecutionEnabled", value.pythonExecutionEnabled)
+            .putBoolean("termuxExecutionEnabled", value.termuxExecutionEnabled)
             .putBoolean("autoVerifyChanges", value.autoVerifyChanges)
             .putBoolean("animationsEnabled", value.animationsEnabled)
             .putString("language", value.language.name)

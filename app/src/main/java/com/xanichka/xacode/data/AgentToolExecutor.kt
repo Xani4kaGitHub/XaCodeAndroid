@@ -9,9 +9,11 @@ class AgentToolExecutor(
     private val repository: WorkspaceRepository,
     private val projectUri: String,
     private val pythonRuntime: PythonRuntime,
+    private val termuxBridge: TermuxBridge,
     private val destructiveToolsEnabled: Boolean = false,
     private val networkDownloadsEnabled: Boolean = false,
-    private val pythonExecutionEnabled: Boolean = false
+    private val pythonExecutionEnabled: Boolean = false,
+    private val termuxExecutionEnabled: Boolean = false
 ) {
     private val backups = linkedMapOf<String, String>()
     private val todos = linkedMapOf<Int, String>()
@@ -34,6 +36,7 @@ class AgentToolExecutor(
         put(tool("finish_task", "Finish after checking that requested work is complete", JSONObject().put("summary", string("Short result summary")), listOf("summary")))
         if (networkDownloadsEnabled) put(tool("http_download", "Download a file from a public HTTPS URL into the current project", JSONObject().put("url", string("Public HTTPS source URL")).put("path", string("Relative destination path with extension")), listOf("url", "path")))
         if (pythonExecutionEnabled) put(tool("run_python", "Run a Python .py file from the current Android project and return stdout and stderr", JSONObject().put("path", string("Relative .py entry file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
+        if (termuxExecutionEnabled) put(tool("run_command", "Run a shell command with Termux in the current Android project. Use this for node, npm, git, compilers and project tests. Return stdout, stderr and exit code.", JSONObject().put("command", string("Shell command to run inside the project directory")).put("timeoutSeconds", integer("Timeout from 1 to 180 seconds")), listOf("command")))
     }
     val anthropicDefinitions: JSONArray = JSONArray().apply {
         for (index in 0 until definitions.length()) {
@@ -78,6 +81,10 @@ class AgentToolExecutor(
             "finish_task" -> "Task finished: ${args.getString("summary")}"
             "http_download" -> { require(networkDownloadsEnabled) { "Network downloads are disabled in settings" }; download(args.getString("url"), args.getString("path")) }
             "run_python" -> { require(pythonExecutionEnabled) { "Python execution is disabled in settings" }; pythonRuntime.run(projectUri, args.getString("path"), args.optJSONArray("arguments") ?: JSONArray()) }
+            "run_command" -> {
+                require(termuxExecutionEnabled) { "Termux execution is disabled in settings" }
+                termuxBridge.run(projectUri, args.getString("command"), args.optLong("timeoutSeconds", 90).coerceIn(1, 180)).display()
+            }
             else -> "Unknown tool: $name"
         }
     }.getOrElse { "Tool error: ${it.message}" }

@@ -10,6 +10,7 @@ import com.xanichka.xacode.data.AgentProgress
 import com.xanichka.xacode.data.LocalStore
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.data.PythonRuntime
+import com.xanichka.xacode.data.TermuxBridge
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.Conversation
@@ -46,6 +47,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val client = AiClient()
     private val workspace = WorkspaceRepository(application)
     private val pythonRuntime = PythonRuntime(application, workspace)
+    private val termuxBridge = TermuxBridge(application)
     private val persistenceDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val initialSettings = store.loadSettings()
     private val _state = MutableStateFlow(
@@ -231,9 +233,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             workspace,
                             it.treeUri,
                             pythonRuntime,
+                            termuxBridge,
                             destructiveToolsEnabled = currentSettings.destructiveToolsEnabled,
                             networkDownloadsEnabled = currentSettings.networkDownloadsEnabled,
-                            pythonExecutionEnabled = currentSettings.pythonExecutionEnabled
+                            pythonExecutionEnabled = currentSettings.pythonExecutionEnabled,
+                            termuxExecutionEnabled = currentSettings.termuxExecutionEnabled
                         )
                     }
                     client.complete(currentSettings, profile, messages, tools) { progress -> _state.update { it.copy(agentProgress = progress) } }

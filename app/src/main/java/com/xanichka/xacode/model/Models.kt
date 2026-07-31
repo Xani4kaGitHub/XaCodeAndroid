@@ -73,6 +73,7 @@ data class AppSettings(
     val destructiveToolsEnabled: Boolean = false,
     val networkDownloadsEnabled: Boolean = false,
     val pythonExecutionEnabled: Boolean = false,
+    val termuxExecutionEnabled: Boolean = false,
     val autoVerifyChanges: Boolean = true,
     val animationsEnabled: Boolean = true,
     val language: UiLanguage = UiLanguage.RUSSIAN

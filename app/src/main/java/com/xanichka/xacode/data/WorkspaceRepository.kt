@@ -226,6 +226,7 @@ class WorkspaceRepository(private val context: Context) {
             if (depth > 8 || result.size >= limit) return
             folder.listFiles().forEach { child ->
                 val name = child.name ?: return@forEach
+                if (child.isDirectory && name in SEARCH_EXCLUDED_DIRECTORIES) return@forEach
                 val path = if (prefix.isBlank()) name else "$prefix/$name"
                 if (name.contains(query, true)) result += path
                 if (child.isDirectory) walk(child, path, depth + 1)
@@ -275,6 +276,7 @@ class WorkspaceRepository(private val context: Context) {
             if (depth > 10 || result.size >= limit) return
             folder.listFiles().forEach { child ->
                 val name = child.name ?: return@forEach
+                if (child.isDirectory && name in SEARCH_EXCLUDED_DIRECTORIES) return@forEach
                 val path = if (prefix.isBlank()) name else "$prefix/$name"
                 result += path
                 if (child.isDirectory) walk(child, path, depth + 1)
@@ -330,5 +332,6 @@ class WorkspaceRepository(private val context: Context) {
     private companion object {
         const val MAX_TEXT_BYTES = 2 * 1024 * 1024
         const val MAX_BINARY_BYTES = 25 * 1024 * 1024
+        val SEARCH_EXCLUDED_DIRECTORIES = setOf(".git", ".gradle", ".idea", "build", "dist", "node_modules", "__pycache__", ".xacode")
     }
 }
