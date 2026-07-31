@@ -5,6 +5,12 @@ import java.util.UUID
 
 enum class ProviderType { DEEPSEEK, OPENAI, ANTHROPIC, GOOGLE, OPENROUTER, AGENTROUTER, OLLAMA, CUSTOM }
 
+enum class UiLanguage(val label: String) {
+    RUSSIAN("Русский"),
+    UKRAINIAN("Українська"),
+    ENGLISH("English")
+}
+
 @Immutable
 data class ProviderPreset(
     val type: ProviderType,
@@ -64,8 +70,12 @@ data class AppSettings(
     val projects: List<ProjectWorkspace> = emptyList(),
     val permissionOnboardingDone: Boolean = false,
     val agentFileToolsEnabled: Boolean = true,
+    val destructiveToolsEnabled: Boolean = false,
+    val networkDownloadsEnabled: Boolean = false,
+    val pythonExecutionEnabled: Boolean = false,
     val autoVerifyChanges: Boolean = true,
-    val animationsEnabled: Boolean = true
+    val animationsEnabled: Boolean = true,
+    val language: UiLanguage = UiLanguage.RUSSIAN
 ) {
     val activeProfile: ModelProfile
         get() = profiles.firstOrNull { it.id == activeProfileId } ?: profiles.first()

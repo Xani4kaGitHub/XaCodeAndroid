@@ -8,16 +8,13 @@ import com.xanichka.xacode.model.ProviderType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.URL
 
 data class AiResult(val text: String, val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0)
 data class AgentProgress(val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val currentTool: String = "")
 
 class AiClient {
     fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null, onProgress: (AgentProgress) -> Unit = {}): AiResult {
-        require(profile.baseUrl.startsWith("https://") || profile.baseUrl.startsWith("http://")) {
-            "Укажите полный адрес API в настройках модели"
-        }
+        NetworkSecurity.apiUrl(profile.baseUrl)
         require(profile.model.isNotBlank() || profile.model == "-") { "Укажите модель в настройках" }
         val systemPrompt = buildString {
             append("Ты XaCode — самостоятельный AI-агент для разработки и обычных вопросов. ")
@@ -25,7 +22,7 @@ class AiClient {
             append("Ты работаешь внутри нативного Android-приложения XaCode, а не на Windows или обычном ПК. Не упоминай PowerShell и пути C:\\, если пользователь сам их не дал. ")
             append("Не проси выбирать режим. Давай практичный результат на языке пользователя.")
             if (tools != null) {
-                append("\nТекущий чат привязан к папке проекта. У тебя реально есть Android-инструменты inspect_workspace, list_directory, read_file, write_file, edit_file, find_files, file_info, search_code, create_directory, rename_file, delete_file, apply_patch, undo_file, manage_todos, http_download и run_python. ")
+                append("\nТекущий чат привязан к папке проекта. У тебя реально есть Android-инструменты: ${tools.toolNames}. ")
                 append("Если пользователь просит создать или изменить проект, ОБЯЗАТЕЛЬНО вызывай инструменты, а не просто печатай код в ответе. Сначала изучи структуру и нужные файлы, затем вноси изменения небольшими шагами. Не выдумывай содержимое файлов.")
                 if (settings.autoVerifyChanges) append(" После записи перечитай важные изменённые файлы и проверь результат перед финальным ответом.")
             } else {
@@ -171,7 +168,7 @@ class AiClient {
     }
 
     private fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val connection = NetworkSecurity.apiUrl(url).openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 30_000
@@ -181,7 +178,7 @@ class AiClient {
             connection.outputStream.bufferedWriter().use { it.write(payload.toString()) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val response = NetworkSecurity.readLimited(stream, 8 * 1024 * 1024)
             if (code !in 200..299) error(extractError(response).ifBlank { "API вернул ошибку $code" })
             response
         } finally {

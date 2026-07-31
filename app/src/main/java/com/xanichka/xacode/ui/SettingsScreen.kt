@@ -1,7 +1,11 @@
 package com.xanichka.xacode.ui
 
 import android.content.Intent
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.provider.DocumentsContract
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,6 +51,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +74,7 @@ import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
+import com.xanichka.xacode.model.UiLanguage
 import com.xanichka.xacode.model.presetFor
 import com.xanichka.xacode.model.providerPresets
 import com.xanichka.xacode.ui.icons.PhIcons
@@ -103,14 +109,15 @@ fun SettingsScreen(
         Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
             SettingsHeader(
                 title = when (page) {
-                    SettingsPage.HOME -> "Настройки"
-                    SettingsPage.MODELS -> "Модели и API"
-                    SettingsPage.PROFILE -> "Подключение"
-                    SettingsPage.DEVICE -> "Доступ к устройству"
-                    SettingsPage.PERSONALIZATION -> "Персонализация"
-                    SettingsPage.TOOLS -> "Инструменты агента"
-                    SettingsPage.APPEARANCE -> "Оформление"
+                    SettingsPage.HOME -> tr(draft.language, "Настройки", "Налаштування", "Settings")
+                    SettingsPage.MODELS -> tr(draft.language, "Модели и API", "Моделі та API", "Models and API")
+                    SettingsPage.PROFILE -> tr(draft.language, "Подключение", "Підключення", "Connection")
+                    SettingsPage.DEVICE -> tr(draft.language, "Доступ к устройству", "Доступ до пристрою", "Device access")
+                    SettingsPage.PERSONALIZATION -> tr(draft.language, "Персонализация", "Персоналізація", "Personalization")
+                    SettingsPage.TOOLS -> tr(draft.language, "Инструменты агента", "Інструменти агента", "Agent tools")
+                    SettingsPage.APPEARANCE -> tr(draft.language, "Оформление", "Оформлення", "Appearance")
                 },
+                language = draft.language,
                 isHome = page == SettingsPage.HOME,
                 onBack = ::goBack,
                 onDone = { onSave(draft) }
@@ -171,11 +178,11 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingsHeader(title: String, isHome: Boolean, onBack: () -> Unit, onDone: () -> Unit) {
+private fun SettingsHeader(title: String, language: UiLanguage, isHome: Boolean, onBack: () -> Unit, onDone: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        CircleIconButton(if (isHome) PhIcons.Close else PhIcons.Back, if (isHome) "Закрыть" else "Назад", onBack)
+        CircleIconButton(if (isHome) PhIcons.Close else PhIcons.Back, if (isHome) tr(language, "Закрыть", "Закрити", "Close") else tr(language, "Назад", "Назад", "Back"), onBack)
         Text(title, Modifier.weight(1f).padding(start = 14.dp), fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        if (isHome) TextButton(onClick = onDone) { Text("Готово", color = XaBlue, fontWeight = FontWeight.Bold) }
+        if (isHome) TextButton(onClick = onDone) { Text(tr(language, "Готово", "Готово", "Done"), color = XaBlue, fontWeight = FontWeight.Bold) }
     }
 }
 
@@ -185,30 +192,30 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text("Версия 0.7.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text(tr(settings.language, "Версия 0.8.0", "Версія 0.8.0", "Version 0.8.0"), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
-            SettingsSection("AI И РАЗРАБОТКА") {
-                SettingsRow(PhIcons.Robot, "Модели и API", "${settings.profiles.size} подключений", onModels)
+            SettingsSection(tr(settings.language, "AI И РАЗРАБОТКА", "AI ТА РОЗРОБКА", "AI AND DEVELOPMENT")) {
+                SettingsRow(PhIcons.Robot, tr(settings.language, "Модели и API", "Моделі та API", "Models and API"), tr(settings.language, "${settings.profiles.size} подключений", "${settings.profiles.size} підключень", "${settings.profiles.size} connections"), onModels)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(PhIcons.Sliders, "Персонализация", if (settings.customInstructionsEnabled) "Свои инструкции включены" else "Стандартное поведение", onPersonalization)
+                SettingsRow(PhIcons.Sliders, tr(settings.language, "Персонализация", "Персоналізація", "Personalization"), if (settings.customInstructionsEnabled) tr(settings.language, "Свои инструкции включены", "Власні інструкції увімкнено", "Custom instructions enabled") else tr(settings.language, "Стандартное поведение", "Стандартна поведінка", "Default behavior"), onPersonalization)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(PhIcons.Cpu, "Инструменты агента", if (settings.agentFileToolsEnabled) "Файловые инструменты включены" else "Выключены", onTools)
+                SettingsRow(PhIcons.Cpu, tr(settings.language, "Инструменты агента", "Інструменти агента", "Agent tools"), if (settings.agentFileToolsEnabled) tr(settings.language, "Файловые инструменты включены", "Файлові інструменти увімкнено", "File tools enabled") else tr(settings.language, "Выключены", "Вимкнено", "Disabled"), onTools)
             }
         }
         item {
-            SettingsSection("УСТРОЙСТВО") {
-                SettingsRow(PhIcons.Folders, "Проекты и доступ", if (settings.projects.isEmpty()) "Папки не добавлены" else "${settings.projects.size} рабочих папок", onDevice)
+            SettingsSection(tr(settings.language, "УСТРОЙСТВО", "ПРИСТРІЙ", "DEVICE")) {
+                SettingsRow(PhIcons.Folders, tr(settings.language, "Проекты и доступ", "Проєкти та доступ", "Projects and access"), if (settings.projects.isEmpty()) tr(settings.language, "Папки не добавлены", "Папки не додано", "No folders added") else tr(settings.language, "${settings.projects.size} рабочих папок", "${settings.projects.size} робочих папок", "${settings.projects.size} workspace folders"), onDevice)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
-                SettingsRow(PhIcons.Shield, "Разрешения Android", "Только выбранные папки", onDevice)
+                SettingsRow(PhIcons.Shield, tr(settings.language, "Разрешения Android", "Дозволи Android", "Android permissions"), tr(settings.language, "Только выбранные папки", "Лише вибрані папки", "Selected folders only"), onDevice)
             }
         }
         item {
-            SettingsSection("ПРИЛОЖЕНИЕ") {
-                SettingsRow(PhIcons.Palette, "Оформление", "Catppuccin", onAppearance)
+            SettingsSection(tr(settings.language, "ПРИЛОЖЕНИЕ", "ЗАСТОСУНОК", "APPLICATION")) {
+                SettingsRow(PhIcons.Palette, tr(settings.language, "Оформление и язык", "Оформлення та мова", "Appearance and language"), "Catppuccin", onAppearance)
                 HorizontalDivider(Modifier.padding(start = 58.dp))
-                InfoRow(PhIcons.Storage, "Локальные данные", "История хранится на этом устройстве")
+                InfoRow(PhIcons.Storage, tr(settings.language, "Локальные данные", "Локальні дані", "Local data"), tr(settings.language, "История хранится на этом устройстве", "Історія зберігається на цьому пристрої", "History is stored on this device"))
             }
         }
     }
@@ -285,6 +292,11 @@ private fun ProfileEditor(
     onDelete: () -> Unit
 ) {
     var showKey by rememberSaveable(profile.id) { mutableStateOf(false) }
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(showKey, activity) {
+        if (showKey) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+    }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             OutlinedTextField(profile.name, { onUpdate(profile.copy(name = it)) }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
@@ -336,6 +348,12 @@ private fun ProfileEditor(
             TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Icon(PhIcons.Trash, null, tint = MaterialTheme.colorScheme.error); Spacer(Modifier.width(8.dp)); Text("Удалить подключение", color = MaterialTheme.colorScheme.error) }
         }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
@@ -442,10 +460,17 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         item {
             Text("По подходу XaCode Desktop модель получает только включённые инструменты. На Android они работают строго внутри папки проекта.", color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
         }
-        item { SettingsSection("ФАЙЛЫ ПРОЕКТА") {
-            ToggleRow("Файловые инструменты", "Чтение, запись, поиск, создание и переименование", settings.agentFileToolsEnabled) { onChange(settings.copy(agentFileToolsEnabled = it)) }
+        item { SettingsSection(tr(settings.language, "ФАЙЛЫ ПРОЕКТА", "ФАЙЛИ ПРОЄКТУ", "PROJECT FILES")) {
+            ToggleRow(tr(settings.language, "Файловые инструменты", "Файлові інструменти", "File tools"), tr(settings.language, "Чтение, запись, поиск, создание и переименование", "Читання, запис, пошук, створення та перейменування", "Read, write, search, create and rename"), settings.agentFileToolsEnabled) { onChange(settings.copy(agentFileToolsEnabled = it)) }
             HorizontalDivider(Modifier.padding(start = 16.dp))
-            ToggleRow("Проверять изменения", "После работы перечитать изменённые файлы", settings.autoVerifyChanges) { onChange(settings.copy(autoVerifyChanges = it)) }
+            ToggleRow(tr(settings.language, "Проверять изменения", "Перевіряти зміни", "Verify changes"), tr(settings.language, "После работы перечитать изменённые файлы", "Після роботи перечитати змінені файли", "Re-read changed files after work"), settings.autoVerifyChanges) { onChange(settings.copy(autoVerifyChanges = it)) }
+        } }
+        item { SettingsSection(tr(settings.language, "ОПАСНЫЕ ВОЗМОЖНОСТИ", "НЕБЕЗПЕЧНІ МОЖЛИВОСТІ", "RISKY CAPABILITIES")) {
+            ToggleRow(tr(settings.language, "Удаление файлов агентом", "Видалення файлів агентом", "Agent file deletion"), tr(settings.language, "Разрешает модели без отдельного диалога удалять файлы внутри проекта", "Дозволяє моделі без окремого діалогу видаляти файли в проєкті", "Allows the model to delete project files without another dialog"), settings.destructiveToolsEnabled) { onChange(settings.copy(destructiveToolsEnabled = it)) }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+            ToggleRow(tr(settings.language, "Загрузки из интернета", "Завантаження з інтернету", "Internet downloads"), tr(settings.language, "Только публичные HTTPS-адреса, до 25 МБ", "Лише публічні HTTPS-адреси, до 25 МБ", "Public HTTPS addresses only, up to 25 MB"), settings.networkDownloadsEnabled) { onChange(settings.copy(networkDownloadsEnabled = it)) }
+            HorizontalDivider(Modifier.padding(start = 16.dp))
+            ToggleRow(tr(settings.language, "Запуск Python агентом", "Запуск Python агентом", "Agent Python execution"), tr(settings.language, "Код выполняется внутри процесса приложения — включайте только для доверенных проектов", "Код виконується в процесі застосунку — вмикайте лише для довірених проєктів", "Code runs inside the app process — enable only for trusted projects"), settings.pythonExecutionEnabled) { onChange(settings.copy(pythonExecutionEnabled = it)) }
         } }
         item { SettingsSection("ДОСТУПНЫЕ ИНСТРУМЕНТЫ") {
             InfoRow(PhIcons.FileCode, "read_file · write_file · edit_file", "Чтение и изменение кода")
@@ -468,11 +493,39 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
 
 @Composable
 private fun AppearancePage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+    var languageMenu by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
-            SettingsSection("ТЕМА") {
+            SettingsSection(tr(settings.language, "ЯЗЫК", "МОВА", "LANGUAGE")) {
+                Box(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { languageMenu = true }.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(PhIcons.Chat, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(16.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(tr(settings.language, "Язык приложения", "Мова застосунку", "App language"), fontWeight = FontWeight.SemiBold)
+                            Text(settings.language.label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                        Icon(PhIcons.Next, null, Modifier.size(17.dp))
+                    }
+                    DropdownMenu(expanded = languageMenu, onDismissRequest = { languageMenu = false }) {
+                        UiLanguage.entries.forEach { language ->
+                            DropdownMenuItem(
+                                text = { Text(language.label) },
+                                trailingIcon = { if (language == settings.language) Icon(PhIcons.Check, null, tint = XaBlue) },
+                                onClick = { languageMenu = false; onChange(settings.copy(language = language)) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsSection(tr(settings.language, "ТЕМА", "ТЕМА", "THEME")) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text("Catppuccin", fontWeight = FontWeight.Bold); Text("Тёмная фиолетовая палитра", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+                    Column(Modifier.weight(1f)) { Text("Catppuccin", fontWeight = FontWeight.Bold); Text(tr(settings.language, "Тёмная фиолетовая палитра", "Темна фіолетова палітра", "Dark purple palette"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
                     Icon(PhIcons.Check, null, tint = XaBlue)
                 }
                 Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -480,7 +533,7 @@ private fun AppearancePage(settings: AppSettings, onChange: (AppSettings) -> Uni
                 }
             }
         }
-        item { SettingsSection("ИНТЕРФЕЙС") { ToggleRow("Плавные анимации", "Переходы экранов и появление элементов", settings.animationsEnabled) { onChange(settings.copy(animationsEnabled = it)) } } }
+        item { SettingsSection(tr(settings.language, "ИНТЕРФЕЙС", "ІНТЕРФЕЙС", "INTERFACE")) { ToggleRow(tr(settings.language, "Плавные анимации", "Плавні анімації", "Smooth animations"), tr(settings.language, "Переходы экранов и появление элементов", "Переходи екранів і поява елементів", "Screen transitions and element appearance"), settings.animationsEnabled) { onChange(settings.copy(animationsEnabled = it)) } } }
     }
 }
 

@@ -139,8 +139,9 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
         ) {
             Scaffold(topBar = {
                 ChatHeader(
-                    title = state.activeProject?.name ?: "Чат",
+                    title = state.activeProject?.name ?: tr(state.settings.language, "Чат", "Чат", "Chat"),
                     subtitle = state.currentProfile.name,
+                    language = state.settings.language,
                     onMenu = { scope.launch { drawerState.open() } },
                     onTitle = { if (state.activeProject != null) showFiles = true },
                     onNewChat = { viewModel.newChat(state.activeProjectId) }
@@ -158,6 +159,7 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
     if (permissionCenter) {
         PermissionCenter(
             hasProjects = state.settings.projectsRootUri.isNotBlank(),
+            language = state.settings.language,
             onChooseFolder = { rootFolderLauncher.launch(null) },
             onDone = { permissionCenter = false; viewModel.finishPermissionOnboarding() }
         )
@@ -165,26 +167,26 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
     state.error?.let { message ->
         AlertDialog(
             onDismissRequest = viewModel::dismissError,
-            title = { Text("Не получилось отправить") }, text = { Text(message) },
-            confirmButton = { TextButton(onClick = viewModel::dismissError) { Text("Понятно") } },
-            dismissButton = { TextButton(onClick = { viewModel.dismissError(); showSettings = true }) { Text("Настроить модель") } }
+            title = { Text(tr(state.settings.language, "Не получилось отправить", "Не вдалося надіслати", "Could not send")) }, text = { Text(message) },
+            confirmButton = { TextButton(onClick = viewModel::dismissError) { Text(tr(state.settings.language, "Понятно", "Зрозуміло", "OK")) } },
+            dismissButton = { TextButton(onClick = { viewModel.dismissError(); showSettings = true }) { Text(tr(state.settings.language, "Настроить модель", "Налаштувати модель", "Configure model")) } }
         )
     }
 }
 
 @Composable
-private fun ChatHeader(title: String, subtitle: String, onMenu: () -> Unit, onTitle: () -> Unit, onNewChat: () -> Unit) {
+private fun ChatHeader(title: String, subtitle: String, language: com.xanichka.xacode.model.UiLanguage, onMenu: () -> Unit, onTitle: () -> Unit, onNewChat: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).statusBarsPadding().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        CircleIconButton(PhIcons.Menu, "Меню", onMenu)
+        CircleIconButton(PhIcons.Menu, tr(language, "Меню", "Меню", "Menu"), onMenu)
         Column(Modifier.clickable(onClick = onTitle).padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(subtitle, color = XaBlue, fontSize = 10.sp, maxLines = 1)
         }
-        CircleIconButton(PhIcons.Plus, "Новый чат", onNewChat)
+        CircleIconButton(PhIcons.Plus, tr(language, "Новый чат", "Новий чат", "New chat"), onNewChat)
     }
 }
 
@@ -202,39 +204,39 @@ private fun AppDrawer(
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(40.dp); Spacer(Modifier.width(11.dp)); Text("XaCode", fontWeight = FontWeight.Bold, fontSize = 22.sp, modifier = Modifier.weight(1f))
                 Box {
-                    CircleIconButton(PhIcons.Plus, "Создать", onClick = { showProjectCreation = true })
+                    CircleIconButton(PhIcons.Plus, tr(settings.language, "Создать", "Створити", "Create"), onClick = { showProjectCreation = true })
                     DropdownMenu(expanded = showProjectCreation, onDismissRequest = { showProjectCreation = false }) {
                         DropdownMenuItem(
-                            text = { Column { Text("Начать с нуля", fontWeight = FontWeight.SemiBold); Text("Создать новую папку автоматически", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+                            text = { Column { Text(tr(settings.language, "Начать с нуля", "Почати з нуля", "Start from scratch"), fontWeight = FontWeight.SemiBold); Text(tr(settings.language, "Создать новую папку автоматически", "Створити нову папку автоматично", "Create a new folder automatically"), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
                             leadingIcon = { Icon(PhIcons.Plus, null) },
                             onClick = { showProjectCreation = false; onNewProject() }
                         )
                         DropdownMenuItem(
-                            text = { Column { Text("Выбрать папку", fontWeight = FontWeight.SemiBold); Text("Подключить существующий проект", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+                            text = { Column { Text(tr(settings.language, "Выбрать папку", "Вибрати папку", "Choose folder"), fontWeight = FontWeight.SemiBold); Text(tr(settings.language, "Подключить существующий проект", "Підключити наявний проєкт", "Connect an existing project"), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
                             leadingIcon = { Icon(PhIcons.Folders, null) },
                             onClick = { showProjectCreation = false; onAddExternalProject() }
                         )
                     }
                 }
             }
-            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 14.dp), placeholder = { Text("Поиск в чатах") }, leadingIcon = { Icon(PhIcons.Search, null, Modifier.size(19.dp)) }, singleLine = true, shape = RoundedCornerShape(24.dp))
+            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 14.dp), placeholder = { Text(tr(settings.language, "Поиск в чатах", "Пошук у чатах", "Search chats")) }, leadingIcon = { Icon(PhIcons.Search, null, Modifier.size(19.dp)) }, singleLine = true, shape = RoundedCornerShape(24.dp))
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)) {
-                item { DrawerAction(PhIcons.Chat, "Новый чат", "Без папки", onNewChat) }
-                item { Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) { Text("ПРОЕКТЫ", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp); IconButton(onClick = onNewProject) { Icon(PhIcons.Plus, "Добавить проект", Modifier.size(19.dp)) } } }
+                item { DrawerAction(PhIcons.Chat, tr(settings.language, "Новый чат", "Новий чат", "New chat"), tr(settings.language, "Без папки", "Без папки", "No folder"), onNewChat) }
+                item { Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) { Text(tr(settings.language, "ПРОЕКТЫ", "ПРОЄКТИ", "PROJECTS"), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp); IconButton(onClick = onNewProject) { Icon(PhIcons.Plus, tr(settings.language, "Добавить проект", "Додати проєкт", "Add project"), Modifier.size(19.dp)) } } }
                 items(projects, key = { "project-${it.id}" }) { project ->
                     Column {
-                        ProjectDrawerRow(project, conversations.count { it.projectId == project.id }, activeProjectId == project.id, { onSelectProject(project.id) }, { onNewProjectChat(project.id) }, onDeleteProject)
+                        ProjectDrawerRow(project, conversations.count { it.projectId == project.id }, activeProjectId == project.id, settings.language, { onSelectProject(project.id) }, { onNewProjectChat(project.id) }, onDeleteProject)
                         conversations.filter { it.projectId == project.id }.take(4).forEach { conversation -> NestedConversationRow(conversation, conversation.id == activeId) { onSelect(conversation.id) } }
                     }
                 }
-                item { TextButton(onClick = onAddExternalProject, Modifier.padding(horizontal = 12.dp)) { Icon(PhIcons.Paperclip, null, Modifier.size(17.dp)); Spacer(Modifier.width(7.dp)); Text("Подключить другую папку") } }
-                item { Text("ЧАТЫ", Modifier.padding(start = 18.dp, top = 12.dp, bottom = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp) }
+                item { TextButton(onClick = onAddExternalProject, Modifier.padding(horizontal = 12.dp)) { Icon(PhIcons.Paperclip, null, Modifier.size(17.dp)); Spacer(Modifier.width(7.dp)); Text(tr(settings.language, "Подключить другую папку", "Підключити іншу папку", "Connect another folder")) } }
+                item { Text(tr(settings.language, "ЧАТЫ", "ЧАТИ", "CHATS"), Modifier.padding(start = 18.dp, top = 12.dp, bottom = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp) }
                 items(visible, key = { it.id }) { conversation ->
                     Box(Modifier.padding(horizontal = 8.dp)) { DrawerConversationRow(conversation, settings.profiles.firstOrNull { it.id == conversation.modelProfileId }?.name ?: "Модель", conversation.id == activeId, { onSelect(conversation.id) }, { onDelete(conversation.id) }) }
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .3f))
-            DrawerAction(PhIcons.Settings, "Настройки", "Модели, API и доступ", onSettings)
+            DrawerAction(PhIcons.Settings, tr(settings.language, "Настройки", "Налаштування", "Settings"), tr(settings.language, "Модели, API и доступ", "Моделі, API та доступ", "Models, API and access"), onSettings)
         }
     }
 }
@@ -248,13 +250,13 @@ private fun NestedConversationRow(conversation: Conversation, selected: Boolean,
 }
 
 @Composable
-private fun ProjectDrawerRow(project: ProjectWorkspace, chatCount: Int, selected: Boolean, onClick: () -> Unit, onNewChat: () -> Unit, onDelete: (String, Boolean) -> Unit) {
+private fun ProjectDrawerRow(project: ProjectWorkspace, chatCount: Int, selected: Boolean, language: com.xanichka.xacode.model.UiLanguage, onClick: () -> Unit, onNewChat: () -> Unit, onDelete: (String, Boolean) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp).background(if (selected) XaSurfaceHigh else MaterialTheme.colorScheme.background, RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(start = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(PhIcons.Folders, null, Modifier.size(22.dp), tint = if (selected) XaBlue else MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold); Text("$chatCount чатов", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
-        IconButton(onClick = onNewChat) { Icon(PhIcons.Plus, "Новый чат в этой папке", Modifier.size(18.dp)) }
+        Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold); Text(tr(language, "$chatCount чатов", "$chatCount чатів", "$chatCount chats"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
+        IconButton(onClick = onNewChat) { Icon(PhIcons.Plus, tr(language, "Новый чат в этой папке", "Новий чат у цій папці", "New chat in this folder"), Modifier.size(18.dp)) }
         Box { IconButton(onClick = { expanded = true }) { Icon(PhIcons.More, "Действия", Modifier.size(18.dp)) }; DropdownMenu(expanded, { expanded = false }) { DropdownMenuItem(text = { Text("Убрать из XaCode") }, onClick = { expanded = false; onDelete(project.id, false) }); if (project.managed) DropdownMenuItem(text = { Text("Удалить папку и содержимое", color = MaterialTheme.colorScheme.error) }, onClick = { expanded = false; confirmDelete = true }) } }
     }
     if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Удалить проект?") }, text = { Text("Папка «${project.name}» и всё внутри неё будут удалены без возможности восстановления.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete(project.id, true) }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } })

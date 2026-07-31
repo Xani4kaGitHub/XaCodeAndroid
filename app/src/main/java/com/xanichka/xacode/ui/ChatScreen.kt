@@ -129,14 +129,14 @@ fun ChatScreen(
     }
 
     val chatContent: @Composable (Boolean) -> Unit = { empty ->
-            if (empty) WelcomePanel(projectName = state.activeProject?.name, onSuggestion = { input = it }, modifier = Modifier.fillMaxSize())
+            if (empty) WelcomePanel(projectName = state.activeProject?.name, language = state.settings.language, onSuggestion = { input = it }, modifier = Modifier.fillMaxSize())
             else LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
-                    items(messages, key = { it.id }) { MessageItem(it) }
+                    items(messages, key = { it.id }) { MessageItem(it, state.settings.language) }
                     if (state.isSending) item { ThinkingIndicator(state.agentProgress) }
                 }
     }
@@ -172,7 +172,7 @@ fun ChatScreen(
                                 onSend(input, fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
                             }
                         }),
-                        decorationBox = { inner -> Box { if (input.isBlank()) Text("Спроси или создай что-нибудь…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp); inner() } }
+                        decorationBox = { inner -> Box { if (input.isBlank()) Text(tr(state.settings.language, "Спроси или создай что-нибудь…", "Запитай або створи щось…", "Ask or create something…"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp); inner() } }
                     )
                     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { showTools = true }) {
@@ -202,7 +202,7 @@ fun ChatScreen(
                                     onSend(input, fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
                                 }
                             ) {
-                                Icon(PhIcons.Send, "Отправить", Modifier.size(20.dp), tint = if (input.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(PhIcons.Send, tr(state.settings.language, "Отправить", "Надіслати", "Send"), Modifier.size(20.dp), tint = if (input.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -213,23 +213,23 @@ fun ChatScreen(
 
     if (showModels) {
         ModalBottomSheet(onDismissRequest = { showModels = false }, containerColor = MaterialTheme.colorScheme.surface) {
-            Text("Выберите модель", Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            Text(tr(state.settings.language, "Выберите модель", "Виберіть модель", "Choose a model"), Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 21.sp, fontWeight = FontWeight.Bold)
             state.settings.profiles.forEach { profile ->
                 ModelChoiceRow(profile, profile.id == state.currentProfile.id) {
                     onProfileSelected(profile.id); showModels = false
                 }
             }
-            ToolRow(PhIcons.Settings, "Настройки моделей", "API-ключи, провайдеры и параметры") { showModels = false; onOpenModelSettings() }
+            ToolRow(PhIcons.Settings, tr(state.settings.language, "Настройки моделей", "Налаштування моделей", "Model settings"), tr(state.settings.language, "API-ключи, провайдеры и параметры", "API-ключі, провайдери та параметри", "API keys, providers and parameters")) { showModels = false; onOpenModelSettings() }
             Spacer(Modifier.height(24.dp))
         }
     }
     if (showTools) {
         ModalBottomSheet(onDismissRequest = { showTools = false }, containerColor = MaterialTheme.colorScheme.surface) {
-            Text("Добавить в запрос", Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 21.sp, fontWeight = FontWeight.Bold)
-            ToolRow(PhIcons.Paperclip, "Файлы", "Прикрепить до четырёх файлов") { showTools = false; fileLauncher.launch(arrayOf("*/*")) }
-            ToolRow(PhIcons.FileCode, "Фото и скриншоты", "Выбрать изображение на устройстве") { showTools = false; fileLauncher.launch(arrayOf("image/*")) }
-            if (state.activeProject != null) ToolRow(PhIcons.Folders, "Файлы проекта", "Открыть, создать или изменить") { showTools = false; onOpenProjectFiles() }
-            ToolRow(PhIcons.Sliders, "Модель и интеллект", state.currentProfile.name) { showTools = false; showModels = true }
+            Text(tr(state.settings.language, "Добавить в запрос", "Додати до запиту", "Add to prompt"), Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            ToolRow(PhIcons.Paperclip, tr(state.settings.language, "Файлы", "Файли", "Files"), tr(state.settings.language, "Прикрепить до четырёх файлов", "Прикріпити до чотирьох файлів", "Attach up to four files")) { showTools = false; fileLauncher.launch(arrayOf("*/*")) }
+            ToolRow(PhIcons.FileCode, tr(state.settings.language, "Фото и скриншоты", "Фото та скриншоти", "Photos and screenshots"), tr(state.settings.language, "Выбрать изображение на устройстве", "Вибрати зображення на пристрої", "Choose an image on the device")) { showTools = false; fileLauncher.launch(arrayOf("image/*")) }
+            if (state.activeProject != null) ToolRow(PhIcons.Folders, tr(state.settings.language, "Файлы проекта", "Файли проєкту", "Project files"), tr(state.settings.language, "Открыть, создать или изменить", "Відкрити, створити або змінити", "Open, create or edit")) { showTools = false; onOpenProjectFiles() }
+            ToolRow(PhIcons.Sliders, tr(state.settings.language, "Модель и интеллект", "Модель та інтелект", "Model and intelligence"), state.currentProfile.name) { showTools = false; showModels = true }
             Spacer(Modifier.height(26.dp))
         }
     }
@@ -262,19 +262,19 @@ private fun ModelChoiceRow(profile: ModelProfile, selected: Boolean, onClick: ()
 }
 
 @Composable
-private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun WelcomePanel(projectName: String?, language: com.xanichka.xacode.model.UiLanguage, onSuggestion: (String) -> Unit, modifier: Modifier = Modifier) {
     val suggestions = listOf(
-        PhIcons.FileCode to "Создай приложение по моей идее",
-        PhIcons.Robot to "Напиши и настрой бота",
-        PhIcons.Search to "Разберись в ошибке кода"
+        PhIcons.FileCode to tr(language, "Создай приложение по моей идее", "Створи застосунок за моєю ідеєю", "Build an app from my idea"),
+        PhIcons.Robot to tr(language, "Напиши и настрой бота", "Напиши та налаштуй бота", "Build and configure a bot"),
+        PhIcons.Search to tr(language, "Разберись в ошибке кода", "Розберися з помилкою в коді", "Debug a code error")
     )
     LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 26.dp, end = 26.dp, top = 20.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom)) {
         item {
             Column { if (projectName != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(PhIcons.Folders, null, Modifier.size(25.dp), tint = XaBlue); Spacer(Modifier.width(10.dp)); Text(projectName, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
-                Text("Android-проект · доступно 17 инструментов", Modifier.padding(top = 5.dp), color = XaBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text("XaCode может читать, создавать, менять и удалять файлы этой папки", Modifier.padding(top = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-            } else Text("Что будем делать?", fontSize = 25.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)) }
+                Text(tr(language, "Android-проект · инструменты зависят от разрешений", "Android-проєкт · інструменти залежать від дозволів", "Android project · tools depend on permissions"), Modifier.padding(top = 5.dp), color = XaBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(tr(language, "XaCode работает только внутри выбранной папки", "XaCode працює лише у вибраній папці", "XaCode works only inside the selected folder"), Modifier.padding(top = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            } else Text(tr(language, "Что будем делать?", "Що будемо робити?", "What shall we build?"), fontSize = 25.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)) }
         }
         items(suggestions) { (icon, title) ->
             Row(Modifier.fillMaxWidth().clickable { onSuggestion(title) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -287,7 +287,7 @@ private fun WelcomePanel(projectName: String?, onSuggestion: (String) -> Unit, m
 }
 
 @Composable
-private fun MessageItem(message: ChatMessage) {
+private fun MessageItem(message: ChatMessage, language: com.xanichka.xacode.model.UiLanguage) {
     val isUser = message.role == MessageRole.USER
     val clipboard = LocalClipboardManager.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
@@ -299,9 +299,9 @@ private fun MessageItem(message: ChatMessage) {
         ) {
             Column(Modifier.padding(if (isUser) 13.dp else 4.dp)) {
                 if (isUser) Text(message.text, fontSize = 15.sp, lineHeight = 22.sp) else MarkdownText(message.text)
-                if (message.context.isNotBlank()) Text("Файлы прикреплены", Modifier.padding(top = 6.dp), color = XaBlue, fontSize = 11.sp)
+                if (message.context.isNotBlank()) Text(tr(language, "Файлы прикреплены", "Файли прикріплено", "Files attached"), Modifier.padding(top = 6.dp), color = XaBlue, fontSize = 11.sp)
                 if (!isUser) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) { Icon(PhIcons.Copy, null, Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text("Копировать", fontSize = 11.sp) }
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) { Icon(PhIcons.Copy, null, Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(tr(language, "Копировать", "Копіювати", "Copy"), fontSize = 11.sp) }
                     Spacer(Modifier.weight(1f))
                     val stats = buildList {
                         if (message.inputTokens + message.outputTokens > 0) add("${message.inputTokens + message.outputTokens} токенов")

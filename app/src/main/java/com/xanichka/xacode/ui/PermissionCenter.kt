@@ -1,9 +1,5 @@
 package com.xanichka.xacode.ui
 
-import android.Manifest
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -25,8 +21,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -36,35 +30,22 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.xanichka.xacode.ui.icons.PhIcons
 import com.xanichka.xacode.ui.theme.XaBlue
+import com.xanichka.xacode.model.UiLanguage
 
 @Composable
-fun PermissionCenter(hasProjects: Boolean, onChooseFolder: () -> Unit, onDone: () -> Unit) {
-    val selected = remember { mutableStateMapOf("camera" to false, "microphone" to false, "photos" to false, "notifications" to false) }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onDone() }
-    fun requestSelected() {
-        val permissions = buildList {
-            if (selected["camera"] == true) add(Manifest.permission.CAMERA)
-            if (selected["microphone"] == true) add(Manifest.permission.RECORD_AUDIO)
-            // Android's system picker grants access only to explicitly selected images.
-            if (selected["notifications"] == true && Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-        }.distinct().toTypedArray()
-        if (permissions.isEmpty()) onDone() else permissionLauncher.launch(permissions)
-    }
+fun PermissionCenter(hasProjects: Boolean, language: UiLanguage, onChooseFolder: () -> Unit, onDone: () -> Unit) {
     Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(22.dp)) {
                 Spacer(Modifier.height(22.dp)); BrandLogo(66.dp); Spacer(Modifier.height(22.dp))
-                Text("Доступ для XaCode", fontSize = 29.sp, fontWeight = FontWeight.Bold)
-                Text("Выбери только то, что понадобится. Разрешения можно изменить позже в настройках Android.", Modifier.padding(top = 8.dp, bottom = 22.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
-                PermissionChoice("files", "Папки проектов", if (hasProjects) "Рабочая папка уже выбрана" else "Чтение и запись только в выбранной папке", hasProjects, onChooseFolder)
-                PermissionChoice("camera", "Камера", "Фото кода, ошибок и документов", selected["camera"] == true) { selected["camera"] = !(selected["camera"] ?: false) }
-                PermissionChoice("microphone", "Микрофон", "Голосовой ввод запросов", selected["microphone"] == true) { selected["microphone"] = !(selected["microphone"] ?: false) }
-                PermissionChoice("photos", "Изображения", "Прикрепление скриншотов из галереи", selected["photos"] == true) { selected["photos"] = !(selected["photos"] ?: false) }
-                PermissionChoice("notifications", "Уведомления", "Сообщать о завершении долгой задачи", selected["notifications"] == true) { selected["notifications"] = !(selected["notifications"] ?: false) }
+                Text(tr(language, "Доступ для XaCode", "Доступ для XaCode", "XaCode access"), fontSize = 29.sp, fontWeight = FontWeight.Bold)
+                Text(tr(language, "Выбери только то, что понадобится. Разрешения можно изменить позже.", "Вибери лише те, що потрібно. Дозволи можна змінити пізніше.", "Choose only what you need. Permissions can be changed later."), Modifier.padding(top = 8.dp, bottom = 22.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
+                PermissionChoice("files", tr(language, "Папки проектов", "Папки проєктів", "Project folders"), if (hasProjects) tr(language, "Рабочая папка уже выбрана", "Робочу папку вже вибрано", "Workspace folder selected") else tr(language, "Чтение и запись только в выбранной папке", "Читання та запис лише у вибраній папці", "Read and write only in the selected folder"), hasProjects, onChooseFolder)
+                Text(tr(language, "Вложения выбираются через системное окно Android. Камера, микрофон и уведомления не запрашиваются.", "Вкладення вибираються через системне вікно Android. Камера, мікрофон і сповіщення не запитуються.", "Attachments use the Android system picker. Camera, microphone and notification permissions are not requested."), color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
                 Spacer(Modifier.weight(1f))
-                Button(onClick = ::requestSelected, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Продолжить", Modifier.padding(vertical = 5.dp), fontWeight = FontWeight.Bold) }
-                TextButton(onClick = onDone, Modifier.fillMaxWidth()) { Text("Пока без разрешений") }
-                Text("Доступ можно изменить в настройках", Modifier.align(Alignment.CenterHorizontally), color = XaBlue, fontSize = 11.sp)
+                Button(onClick = onDone, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text(tr(language, "Продолжить", "Продовжити", "Continue"), Modifier.padding(vertical = 5.dp), fontWeight = FontWeight.Bold) }
+                TextButton(onClick = onDone, Modifier.fillMaxWidth()) { Text(tr(language, "Пока без доступа", "Поки без доступу", "Continue without access")) }
+                Text(tr(language, "Доступ можно изменить в настройках", "Доступ можна змінити в налаштуваннях", "Access can be changed in settings"), Modifier.align(Alignment.CenterHorizontally), color = XaBlue, fontSize = 11.sp)
             }
         }
     }

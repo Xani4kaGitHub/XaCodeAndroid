@@ -227,7 +227,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         } else message
                     }
                     val tools = project?.takeIf { currentSettings.agentFileToolsEnabled }?.let {
-                        AgentToolExecutor(workspace, it.treeUri, pythonRuntime)
+                        AgentToolExecutor(
+                            workspace,
+                            it.treeUri,
+                            pythonRuntime,
+                            destructiveToolsEnabled = currentSettings.destructiveToolsEnabled,
+                            networkDownloadsEnabled = currentSettings.networkDownloadsEnabled,
+                            pythonExecutionEnabled = currentSettings.pythonExecutionEnabled
+                        )
                     }
                     client.complete(currentSettings, profile, messages, tools) { progress -> _state.update { it.copy(agentProgress = progress) } }
                 }

@@ -3,13 +3,15 @@ package com.xanichka.xacode.data
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.URL
 
 /** Safe Android subset of XaCode Desktop tools. Every path is resolved inside one SAF project folder. */
 class AgentToolExecutor(
     private val repository: WorkspaceRepository,
     private val projectUri: String,
-    private val pythonRuntime: PythonRuntime
+    private val pythonRuntime: PythonRuntime,
+    private val destructiveToolsEnabled: Boolean = false,
+    private val networkDownloadsEnabled: Boolean = false,
+    private val pythonExecutionEnabled: Boolean = false
 ) {
     private val backups = linkedMapOf<String, String>()
     private val todos = linkedMapOf<Int, String>()
@@ -25,13 +27,13 @@ class AgentToolExecutor(
         put(tool("search_code", "Regex search through text files", JSONObject().put("pattern", string("Regular expression")), listOf("pattern")))
         put(tool("inspect_workspace", "Inspect project tree and detect common language manifests", JSONObject()))
         put(tool("rename_file", "Rename a file or directory", JSONObject().put("path", string("Current relative path")).put("newName", string("New name only")), listOf("path", "newName")))
-        put(tool("delete_file", "Delete a file or directory recursively", JSONObject().put("path", string("Relative path")), listOf("path")))
+        if (destructiveToolsEnabled) put(tool("delete_file", "Delete a file or directory recursively", JSONObject().put("path", string("Relative path")), listOf("path")))
         put(tool("apply_patch", "Apply a unified diff patch to one text file", JSONObject().put("path", string("Relative file path")).put("patch", string("Unified diff text")), listOf("path", "patch")))
         put(tool("undo_file", "Restore the last in-memory backup made during this task", JSONObject().put("path", string("Relative file path")), listOf("path")))
         put(tool("manage_todos", "Manage a task-local todo list", JSONObject().put("action", enumString("add", "list", "complete", "delete")).put("textOrId", string("Todo text or numeric id")), listOf("action")))
         put(tool("finish_task", "Finish after checking that requested work is complete", JSONObject().put("summary", string("Short result summary")), listOf("summary")))
-        put(tool("http_download", "Download a file from an HTTP or HTTPS URL into the current project", JSONObject().put("url", string("Source URL")).put("path", string("Relative destination path with extension")), listOf("url", "path")))
-        put(tool("run_python", "Run a Python .py file from the current Android project and return stdout and stderr", JSONObject().put("path", string("Relative .py entry file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
+        if (networkDownloadsEnabled) put(tool("http_download", "Download a file from a public HTTPS URL into the current project", JSONObject().put("url", string("Public HTTPS source URL")).put("path", string("Relative destination path with extension")), listOf("url", "path")))
+        if (pythonExecutionEnabled) put(tool("run_python", "Run a Python .py file from the current Android project and return stdout and stderr", JSONObject().put("path", string("Relative .py entry file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
     }
     val anthropicDefinitions: JSONArray = JSONArray().apply {
         for (index in 0 until definitions.length()) {
@@ -39,6 +41,10 @@ class AgentToolExecutor(
             put(JSONObject().put("name", function.getString("name")).put("description", function.getString("description")).put("input_schema", function.getJSONObject("parameters")))
         }
     }
+    val toolNames: String
+        get() = (0 until definitions.length()).joinToString(", ") { index ->
+            definitions.getJSONObject(index).getJSONObject("function").getString("name")
+        }
 
     fun execute(name: String, arguments: String): String = runCatching {
         val args = JSONObject(arguments.ifBlank { "{}" })
@@ -63,14 +69,15 @@ class AgentToolExecutor(
                 require(repository.renameRelative(projectUri, args.getString("path"), newName)) { "Rename failed" }; "Renamed successfully"
             }
             "delete_file" -> {
+                require(destructiveToolsEnabled) { "Destructive tools are disabled in settings" }
                 require(repository.deleteRelative(projectUri, args.getString("path"))) { "Delete failed" }; "Deleted successfully"
             }
             "apply_patch" -> { val path = args.getString("path"); val source = repository.readRelative(projectUri, path); backups[path] = source; repository.writeRelative(projectUri, path, applyUnifiedDiff(source, args.getString("patch"))); "Patch applied successfully" }
             "undo_file" -> { val path = args.getString("path"); val content = backups.remove(path) ?: error("No backup for $path"); repository.writeRelative(projectUri, path, content); "File restored" }
             "manage_todos" -> manageTodos(args)
             "finish_task" -> "Task finished: ${args.getString("summary")}"
-            "http_download" -> download(args.getString("url"), args.getString("path"))
-            "run_python" -> pythonRuntime.run(projectUri, args.getString("path"), args.optJSONArray("arguments") ?: JSONArray())
+            "http_download" -> { require(networkDownloadsEnabled) { "Network downloads are disabled in settings" }; download(args.getString("url"), args.getString("path")) }
+            "run_python" -> { require(pythonExecutionEnabled) { "Python execution is disabled in settings" }; pythonRuntime.run(projectUri, args.getString("path"), args.optJSONArray("arguments") ?: JSONArray()) }
             else -> "Unknown tool: $name"
         }
     }.getOrElse { "Tool error: ${it.message}" }
@@ -104,30 +111,42 @@ class AgentToolExecutor(
     }
 
     private fun download(sourceUrl: String, path: String): String {
-        require(sourceUrl.startsWith("https://") || sourceUrl.startsWith("http://")) { "Only HTTP and HTTPS URLs are supported" }
-        val connection = URL(sourceUrl).openConnection() as HttpURLConnection
-        return try {
-            connection.connectTimeout = 20_000
-            connection.readTimeout = 60_000
-            connection.instanceFollowRedirects = true
-            require(connection.responseCode in 200..299) { "Download failed with HTTP ${connection.responseCode}" }
-            val declared = connection.contentLengthLong
-            require(declared < 0 || declared <= 25L * 1024 * 1024) { "File is larger than 25 MB" }
-            val bytes = connection.inputStream.use { input ->
-                val output = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(16_384)
-                var total = 0
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    total += count
-                    require(total <= 25 * 1024 * 1024) { "File is larger than 25 MB" }
-                    output.write(buffer, 0, count)
+        var url = NetworkSecurity.publicDownloadUrl(sourceUrl)
+        repeat(6) { redirectCount ->
+            val connection = url.openConnection() as HttpURLConnection
+            try {
+                connection.connectTimeout = 20_000
+                connection.readTimeout = 60_000
+                connection.instanceFollowRedirects = false
+                val status = connection.responseCode
+                if (status in 300..399) {
+                    require(redirectCount < 5) { "Too many redirects" }
+                    val location = connection.getHeaderField("Location") ?: error("Redirect has no location")
+                    url = NetworkSecurity.publicDownloadUrl(url.toURI().resolve(location).toString())
+                    return@repeat
                 }
-                output.toByteArray()
+                require(status in 200..299) { "Download failed with HTTP $status" }
+                val declared = connection.contentLengthLong
+                require(declared < 0 || declared <= 25L * 1024 * 1024) { "File is larger than 25 MB" }
+                val bytes = connection.inputStream.use { input ->
+                    val output = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(16_384)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= 25 * 1024 * 1024) { "File is larger than 25 MB" }
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                }
+                repository.writeBytesRelative(projectUri, path, bytes)
+                return "Downloaded ${bytes.size} bytes to $path"
+            } finally {
+                connection.disconnect()
             }
-            repository.writeBytesRelative(projectUri, path, bytes)
-            "Downloaded ${bytes.size} bytes to $path"
-        } finally { connection.disconnect() }
+        }
+        error("Too many redirects")
     }
 }

@@ -38,11 +38,12 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun readText(documentUri: String, maxChars: Int = 256_000): String {
+        val safeLimit = maxChars.coerceIn(1, 1_000_000)
         return context.contentResolver.openInputStream(Uri.parse(documentUri))?.bufferedReader()?.use { reader ->
             val result = StringBuilder()
             val buffer = CharArray(8_192)
-            while (result.length < maxChars) {
-                val count = reader.read(buffer, 0, minOf(buffer.size, maxChars - result.length))
+            while (result.length < safeLimit) {
+                val count = reader.read(buffer, 0, minOf(buffer.size, safeLimit - result.length))
                 if (count <= 0) break
                 result.append(buffer, 0, count)
             }
@@ -51,6 +52,8 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun writeText(parentUri: String, fileName: String, content: String): String {
+        validateName(fileName)
+        require(content.toByteArray(Charsets.UTF_8).size <= MAX_TEXT_BYTES) { "Файл больше 2 МБ" }
         val parent = directory(parentUri)
             ?: error("Рабочая папка недоступна")
         val file = parent.findFile(fileName) ?: parent.createFile(mimeType(fileName), fileName)
@@ -61,11 +64,13 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun updateText(documentUri: String, content: String) {
+        require(content.toByteArray(Charsets.UTF_8).size <= MAX_TEXT_BYTES) { "Файл больше 2 МБ" }
         context.contentResolver.openOutputStream(Uri.parse(documentUri), "wt")?.bufferedWriter()?.use { it.write(content) }
             ?: error("Не удалось открыть файл для записи")
     }
 
     fun createDirectory(parentUri: String, name: String): String {
+        validateName(name)
         val parent = directory(parentUri)
             ?: error("Рабочая папка недоступна")
         return (parent.findFile(name) ?: parent.createDirectory(name))?.uri?.toString()
@@ -76,7 +81,7 @@ class WorkspaceRepository(private val context: Context) {
         DocumentFile.fromSingleUri(context, Uri.parse(documentUri))?.delete() == true
 
     fun rename(documentUri: String, newName: String): Boolean {
-        require(newName.isNotBlank() && '/' !in newName && '\\' !in newName) { "Недопустимое название" }
+        validateName(newName)
         val uri = Uri.parse(documentUri)
         return DocumentsContract.renameDocument(context.contentResolver, uri, newName) != null
     }
@@ -105,8 +110,7 @@ class WorkspaceRepository(private val context: Context) {
 
     fun resolve(rootUri: String, relativePath: String): DocumentFile? {
         var current = directory(rootUri) ?: return null
-        val parts = relativePath.replace('\\', '/').split('/').filter { it.isNotBlank() && it != "." }
-        if (parts.any { it == ".." }) return null
+        val parts = runCatching { safeSegments(relativePath, allowEmpty = true) }.getOrNull() ?: return null
         for (part in parts) current = current.findFile(part) ?: return null
         return current
     }
@@ -128,8 +132,8 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun writeRelative(rootUri: String, relativePath: String, content: String) {
-        val normalized = relativePath.replace('\\', '/').trim('/')
-        require(normalized.isNotBlank() && !normalized.split('/').contains("..")) { "Недопустимый путь" }
+        require(content.toByteArray(Charsets.UTF_8).size <= MAX_TEXT_BYTES) { "Файл больше 2 МБ" }
+        val normalized = safeSegments(relativePath).joinToString("/")
         val parentPath = normalized.substringBeforeLast('/', "")
         val name = normalized.substringAfterLast('/')
         val parent = ensureDirectories(rootUri, parentPath)
@@ -144,16 +148,17 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun deleteRelative(rootUri: String, relativePath: String): Boolean {
-        require(relativePath.isNotBlank()) { "Нельзя удалить корень проекта" }
-        return resolve(rootUri, relativePath)?.delete() == true
+        val normalized = safeSegments(relativePath).joinToString("/")
+        return resolve(rootUri, normalized)?.delete() == true
     }
 
     fun renameRelative(rootUri: String, relativePath: String, newName: String): Boolean {
-        require(newName.isNotBlank() && '/' !in newName && '\\' !in newName) { "Недопустимое название" }
-        val source = resolve(rootUri, relativePath) ?: error("Путь не найден: $relativePath")
+        validateName(newName)
+        val normalizedPath = safeSegments(relativePath).joinToString("/")
+        val source = resolve(rootUri, normalizedPath) ?: error("Путь не найден: $relativePath")
         if (runCatching { rename(source.uri.toString(), newName) }.getOrDefault(false)) return true
         require(source.isFile) { "Этот Android-провайдер не поддерживает переименование папок" }
-        val parentPath = relativePath.replace('\\', '/').substringBeforeLast('/', "")
+        val parentPath = normalizedPath.substringBeforeLast('/', "")
         val parent = (if (parentPath.isBlank()) directory(rootUri) else resolve(rootUri, parentPath))
             ?: error("Родительская папка недоступна")
         require(parent.findFile(newName) == null) { "Файл с таким названием уже существует" }
@@ -167,8 +172,8 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun writeBytesRelative(rootUri: String, relativePath: String, bytes: ByteArray) {
-        val normalized = relativePath.replace('\\', '/').trim('/')
-        require(normalized.isNotBlank() && !normalized.split('/').contains("..")) { "Недопустимый путь" }
+        require(bytes.size <= MAX_BINARY_BYTES) { "Файл больше 25 МБ" }
+        val normalized = safeSegments(relativePath).joinToString("/")
         val parent = ensureDirectories(rootUri, normalized.substringBeforeLast('/', ""))
         val name = normalized.substringAfterLast('/')
         val file = parent.findFile(name) ?: parent.createFile(mimeType(name), name) ?: error("Не удалось создать файл")
@@ -238,11 +243,14 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     fun findFiles(rootUri: String, glob: String, limit: Int = 100): List<String> {
+        require(glob.length <= 256 && '\u0000' !in glob) { "Слишком сложный шаблон" }
         val regex = globToRegex(glob.ifBlank { "**/*" })
         return walkPaths(rootUri, limit).filter { regex.matches(it) }.take(limit)
     }
 
     fun searchCode(rootUri: String, pattern: String, limit: Int = 80): List<String> {
+        require(pattern.length in 1..200) { "Регулярное выражение должно содержать 1–200 символов" }
+        require(!Regex("\\([^)]*[+*][^)]*\\)[+*{]").containsMatchIn(pattern)) { "Потенциально опасное регулярное выражение" }
         val regex = Regex(pattern, setOf(RegexOption.IGNORE_CASE))
         val result = mutableListOf<String>()
         walkPaths(rootUri, 250).forEach { path ->
@@ -296,11 +304,31 @@ class WorkspaceRepository(private val context: Context) {
 
     private fun ensureDirectories(rootUri: String, relativePath: String): DocumentFile {
         var current = directory(rootUri) ?: error("Папка проекта недоступна")
-        relativePath.replace('\\', '/').split('/').filter { it.isNotBlank() }.forEach { part ->
-            require(part != "..") { "Недопустимый путь" }
+        safeSegments(relativePath, allowEmpty = true).forEach { part ->
             current = current.findFile(part)?.takeIf { it.isDirectory } ?: current.createDirectory(part)
                 ?: error("Не удалось создать папку $part")
         }
         return current
+    }
+
+    private fun safeSegments(path: String, allowEmpty: Boolean = false): List<String> {
+        require(path.length <= 1024 && '\u0000' !in path && !path.startsWith('/') && !Regex("^[A-Za-z]:").containsMatchIn(path)) {
+            "Недопустимый путь"
+        }
+        val segments = path.replace('\\', '/').split('/').filter { it.isNotBlank() }
+        require(allowEmpty || segments.isNotEmpty()) { "Недопустимый путь" }
+        segments.forEach(::validateName)
+        return segments
+    }
+
+    private fun validateName(name: String) {
+        require(name.isNotBlank() && name != "." && name != ".." && name.length <= 255 &&
+            '/' !in name && '\\' !in name && name.none { it.code < 32 }
+        ) { "Недопустимое название" }
+    }
+
+    private companion object {
+        const val MAX_TEXT_BYTES = 2 * 1024 * 1024
+        const val MAX_BINARY_BYTES = 25 * 1024 * 1024
     }
 }

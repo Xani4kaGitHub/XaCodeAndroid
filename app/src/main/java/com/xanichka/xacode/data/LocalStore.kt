@@ -8,6 +8,7 @@ import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
+import com.xanichka.xacode.model.UiLanguage
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -83,8 +84,14 @@ class LocalStore(context: Context) {
             projects = projects,
             permissionOnboardingDone = preferences.getBoolean("permissionOnboardingDone", false),
             agentFileToolsEnabled = preferences.getBoolean("agentFileToolsEnabled", true),
+            destructiveToolsEnabled = preferences.getBoolean("destructiveToolsEnabled", false),
+            networkDownloadsEnabled = preferences.getBoolean("networkDownloadsEnabled", false),
+            pythonExecutionEnabled = preferences.getBoolean("pythonExecutionEnabled", false),
             autoVerifyChanges = preferences.getBoolean("autoVerifyChanges", true),
-            animationsEnabled = preferences.getBoolean("animationsEnabled", true)
+            animationsEnabled = preferences.getBoolean("animationsEnabled", true),
+            language = runCatching {
+                UiLanguage.valueOf(preferences.getString("language", UiLanguage.RUSSIAN.name).orEmpty())
+            }.getOrDefault(UiLanguage.RUSSIAN)
         )
     }
 
@@ -125,8 +132,12 @@ class LocalStore(context: Context) {
             .putString("projects", projectsJson.toString())
             .putBoolean("permissionOnboardingDone", value.permissionOnboardingDone)
             .putBoolean("agentFileToolsEnabled", value.agentFileToolsEnabled)
+            .putBoolean("destructiveToolsEnabled", value.destructiveToolsEnabled)
+            .putBoolean("networkDownloadsEnabled", value.networkDownloadsEnabled)
+            .putBoolean("pythonExecutionEnabled", value.pythonExecutionEnabled)
             .putBoolean("autoVerifyChanges", value.autoVerifyChanges)
             .putBoolean("animationsEnabled", value.animationsEnabled)
+            .putString("language", value.language.name)
             .remove("endpoint")
             .remove("model")
             .remove("apiKey")
