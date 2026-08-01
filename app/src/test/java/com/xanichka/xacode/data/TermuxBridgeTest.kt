@@ -12,9 +12,16 @@ class TermuxBridgeTest {
     }
 
     @Test
+    fun structuredRuntimeCommandsMayUseDevNull() {
+        assertFalse(TermuxBridge.isCommandBlocked("command -v node >/dev/null 2>&1 && node --version"))
+        assertFalse(TermuxBridge.isCommandBlocked("git rev-parse --is-inside-work-tree >/dev/null 2>&1"))
+    }
+
+    @Test
     fun dangerousSystemCommandsRemainBlocked() {
         assertTrue(TermuxBridge.isCommandBlocked("rm -rf /"))
         assertTrue(TermuxBridge.isCommandBlocked("mkfs.ext4 /dev/block/example"))
+        assertTrue(TermuxBridge.isCommandBlocked("dd if=/dev/block/example of=dump.img"))
     }
 
     @Test

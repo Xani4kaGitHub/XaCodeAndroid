@@ -105,7 +105,10 @@ class TermuxBridge(private val context: Context) {
         private const val ACTION_RUN_COMMAND = "com.termux.RUN_COMMAND"
         private const val PREFIX = "/data/data/com.termux/files/usr"
         val SAFE_PACKAGES = sortedSetOf("nodejs", "nodejs-lts", "openssl", "openssl-tool", "git", "python", "clang", "make", "cmake", "rust", "golang", "openjdk-21", "curl", "wget", "tar", "zip", "unzip")
-        private val BLOCKED_COMMAND_PARTS = listOf("rm -rf /", "rm -rf /*", "mkfs", "reboot", "shutdown", "su ", "tsu ", "/data/data/", "/system/", "/proc/", "/dev/")
+        private val BLOCKED_COMMAND_PARTS = listOf(
+            "rm -rf /", "rm -rf /*", "mkfs", "reboot", "shutdown", "su ", "tsu ",
+            "/data/data/", "/system/", "/proc/", "/dev/block/", "/dev/mmc", "/dev/sd", "/dev/nvme", "/dev/mapper/"
+        )
         internal fun isCommandBlocked(command: String): Boolean = BLOCKED_COMMAND_PARTS.any(command.lowercase()::contains)
         private const val EXTRA_PATH = "com.termux.RUN_COMMAND_PATH"
         private const val EXTRA_ARGUMENTS = "com.termux.RUN_COMMAND_ARGUMENTS"
