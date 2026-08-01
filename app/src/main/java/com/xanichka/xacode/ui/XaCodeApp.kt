@@ -147,7 +147,7 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
                 )
             }) { padding ->
                 ChatScreen(
-                    state, viewModel::selectProfile, viewModel::send, { viewModel.cancelGeneration() }, Modifier.padding(padding),
+                    state, viewModel::selectProfile, viewModel::updateDraft, viewModel::send, { viewModel.cancelGeneration() }, Modifier.padding(padding),
                     onOpenProjectFiles = { showFiles = true },
                     onOpenModelSettings = { openModelSettings = true; showSettings = true }
                 )
@@ -206,7 +206,7 @@ private fun ChatHeader(title: String, subtitle: String, language: com.xanichka.x
 private fun AppDrawer(
     conversations: List<Conversation>, projects: List<ProjectWorkspace>, activeId: String?, activeProjectId: String?, settings: AppSettings,
     onSelectProject: (String) -> Unit, onNewProject: () -> Unit, onAddExternalProject: () -> Unit, onNewProjectChat: (String) -> Unit, onSelect: (String) -> Unit,
-    onDelete: (String) -> Unit, onDeleteProject: (String, Boolean) -> Unit, onSettings: () -> Unit
+    onDelete: (String) -> Unit, onDeleteProject: (String) -> Unit, onSettings: () -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var showProjectCreation by remember { mutableStateOf(false) }
@@ -255,29 +255,37 @@ private fun AppDrawer(
 @Composable
 private fun NestedConversationRow(conversation: Conversation, selected: Boolean, onClick: () -> Unit, onDelete: () -> Unit) {
     var expanded by remember(conversation.id) { mutableStateOf(false) }
+    var confirmDelete by remember(conversation.id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 38.dp, end = 10.dp).background(if (selected) XaSurfaceHigh else MaterialTheme.colorScheme.background, RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(conversation.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
         if (selected) Surface(Modifier.size(6.dp), shape = androidx.compose.foundation.shape.CircleShape, color = XaBlue) {}
         Box {
             IconButton(onClick = { expanded = true }, modifier = Modifier.size(34.dp)) { Icon(PhIcons.More, "Действия", Modifier.size(17.dp)) }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(text = { Text("Удалить чат") }, leadingIcon = { Icon(PhIcons.Trash, null) }, onClick = { expanded = false; onDelete() })
+                DropdownMenuItem(text = { Text("Удалить чат") }, leadingIcon = { Icon(PhIcons.Trash, null) }, onClick = { expanded = false; confirmDelete = true })
             }
         }
     }
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text("Удалить чат?") },
+        text = { Text("Чат исчезнет из XaCode. Файлы проекта останутся на телефоне.") },
+        confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } }
+    )
 }
 
 @Composable
-private fun ProjectDrawerRow(project: ProjectWorkspace, chatCount: Int, selected: Boolean, language: com.xanichka.xacode.model.UiLanguage, onClick: () -> Unit, onNewChat: () -> Unit, onDelete: (String, Boolean) -> Unit) {
+private fun ProjectDrawerRow(project: ProjectWorkspace, chatCount: Int, selected: Boolean, language: com.xanichka.xacode.model.UiLanguage, onClick: () -> Unit, onNewChat: () -> Unit, onDelete: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp).background(if (selected) XaSurfaceHigh else MaterialTheme.colorScheme.background, RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(start = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(PhIcons.Folders, null, Modifier.size(22.dp), tint = if (selected) XaBlue else MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold); Text(tr(language, "$chatCount чатов", "$chatCount чатів", "$chatCount chats"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) }
         IconButton(onClick = onNewChat) { Icon(PhIcons.Plus, tr(language, "Новый чат в этой папке", "Новий чат у цій папці", "New chat in this folder"), Modifier.size(18.dp)) }
-        Box { IconButton(onClick = { expanded = true }) { Icon(PhIcons.More, "Действия", Modifier.size(18.dp)) }; DropdownMenu(expanded, { expanded = false }) { DropdownMenuItem(text = { Text("Убрать из XaCode") }, onClick = { expanded = false; onDelete(project.id, false) }); if (project.managed) DropdownMenuItem(text = { Text("Удалить папку и содержимое", color = MaterialTheme.colorScheme.error) }, onClick = { expanded = false; confirmDelete = true }) } }
+        Box { IconButton(onClick = { expanded = true }) { Icon(PhIcons.More, "Действия", Modifier.size(18.dp)) }; DropdownMenu(expanded, { expanded = false }) { DropdownMenuItem(text = { Text("Убрать папку из XaCode") }, leadingIcon = { Icon(PhIcons.Trash, null) }, onClick = { expanded = false; confirmDelete = true }) } }
     }
-    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Удалить проект?") }, text = { Text("Папка «${project.name}» и всё внутри неё будут удалены без возможности восстановления.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete(project.id, true) }) { Text("Удалить", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } })
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Убрать папку из XaCode?") }, text = { Text("Чаты этой папки исчезнут из XaCode, но папка «${project.name}» и все файлы останутся на телефоне.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete(project.id) }) { Text("Убрать", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } })
 }
 
 @Composable

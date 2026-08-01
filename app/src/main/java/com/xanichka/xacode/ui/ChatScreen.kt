@@ -104,13 +104,14 @@ private val promptCommands = listOf(
 fun ChatScreen(
     state: AppUiState,
     onProfileSelected: (String) -> Unit,
-    onSend: (String, String) -> Unit,
+    onDraftChange: (String) -> Unit,
+    onSend: (String, String) -> Boolean,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenProjectFiles: () -> Unit = {},
     onOpenModelSettings: () -> Unit = {}
 ) {
-    var input by rememberSaveable { mutableStateOf("") }
+    val input = state.draftText
     var showModels by rememberSaveable { mutableStateOf(false) }
     var showTools by rememberSaveable { mutableStateOf(false) }
     var mentionResults by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -147,7 +148,7 @@ fun ChatScreen(
     }
 
     val chatContent: @Composable (Boolean) -> Unit = { empty ->
-            if (empty) WelcomePanel(projectName = state.activeProject?.name, language = state.settings.language, onSuggestion = { input = it }, modifier = Modifier.fillMaxSize())
+            if (empty) WelcomePanel(projectName = state.activeProject?.name, language = state.settings.language, onSuggestion = onDraftChange, modifier = Modifier.fillMaxSize())
             else LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -181,7 +182,7 @@ fun ChatScreen(
                 PromptSuggestions(
                     commands = slashItems,
                     files = if (activeToken.startsWith('@')) mentionResults else emptyList(),
-                    onCommand = { command -> input = replaceActiveToken(input, "/${command.id} ") },
+                    onCommand = { command -> onDraftChange(replaceActiveToken(input, "/${command.id} ")) },
                     onFile = { path ->
                         val project = state.activeProject ?: return@PromptSuggestions
                         scope.launch {
@@ -196,7 +197,7 @@ fun ChatScreen(
                             if (content != null) {
                                 attachments.removeAll { it.name == path }
                                 attachments += UiAttachment(path, content)
-                                input = replaceActiveToken(input, "@$path ")
+                                onDraftChange(replaceActiveToken(input, "@$path "))
                             }
                         }
                     }
@@ -207,7 +208,7 @@ fun ChatScreen(
                     BasicTextField(
                         value = input,
                         onValueChange = { value ->
-                            input = value
+                            onDraftChange(value)
                             val token = value.substringAfterLast(' ').substringAfterLast('\n')
                             if (token.startsWith('@') && state.activeProject != null) {
                                 scope.launch {
@@ -222,7 +223,7 @@ fun ChatScreen(
                         keyboardActions = KeyboardActions(onSend = {
                             if (input.isNotBlank() && !state.isSending) {
                                 val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
-                                onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
+                                if (onSend(expandSlashPrompt(input), fileContext)) { attachments.clear(); focusManager.clearFocus() }
                             }
                         }),
                         decorationBox = { inner -> Box { if (input.isBlank()) Text(tr(state.settings.language, "Спроси или создай что-нибудь…", "Запитай або створи щось…", "Ask or create something…"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp); inner() } }
@@ -253,7 +254,7 @@ fun ChatScreen(
                                 onClick = {
                                     if (state.isSending) onCancel() else {
                                         val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
-                                        onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
+                                        if (onSend(expandSlashPrompt(input), fileContext)) { attachments.clear(); focusManager.clearFocus() }
                                     }
                                 }
                             ) {

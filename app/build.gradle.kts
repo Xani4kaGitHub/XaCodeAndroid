@@ -13,8 +13,8 @@ android {
         applicationId = "com.xanichka.xacode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.10.1"
+        versionCode = 13
+        versionName = "0.10.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -36,13 +36,18 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }
 
 chaquopy {
     defaultConfig {
         version = "3.13"
+        val localPython = file("${System.getProperty("user.home")}/Tools/Python313/python.exe")
+        if (localPython.isFile) buildPython(localPython.absolutePath)
     }
 }
 

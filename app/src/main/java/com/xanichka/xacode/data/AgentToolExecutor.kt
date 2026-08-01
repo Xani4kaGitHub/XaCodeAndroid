@@ -36,7 +36,15 @@ class AgentToolExecutor(
         put(tool("finish_task", "Finish after checking that requested work is complete", JSONObject().put("summary", string("Short result summary")), listOf("summary")))
         if (networkDownloadsEnabled) put(tool("http_download", "Download a file from a public HTTPS URL into the current project", JSONObject().put("url", string("Public HTTPS source URL")).put("path", string("Relative destination path with extension")), listOf("url", "path")))
         if (pythonExecutionEnabled) put(tool("run_python", "Run a Python .py file from the current Android project and return stdout and stderr", JSONObject().put("path", string("Relative .py entry file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
-        if (termuxExecutionEnabled) put(tool("run_command", "Run a shell command with Termux in the current Android project. Use this for node, npm, git, compilers and project tests. Return stdout, stderr and exit code.", JSONObject().put("command", string("Shell command to run inside the project directory")).put("timeoutSeconds", integer("Timeout from 1 to 180 seconds")), listOf("command")))
+        if (termuxExecutionEnabled) {
+            put(tool("run_command", "Run a shell command with Termux in the current Android project. pkg and apt are allowed; use the structured runtime tools when possible.", JSONObject().put("command", string("Shell command to run inside the project directory")).put("timeoutSeconds", integer("Timeout from 1 to 180 seconds")), listOf("command")))
+            put(tool("inspect_runtime", "Check real installed versions of Python, Node.js, npm, git, curl, tar, clang and Java in Termux", JSONObject()))
+            put(tool("repair_node_runtime", "Repair a broken Termux Node.js/OpenSSL installation, then verify node and npm. Use when node reports CANNOT LINK EXECUTABLE or a missing OpenSSL symbol.", JSONObject()))
+            put(tool("install_termux_packages", "Install approved development packages in Termux", JSONObject().put("packages", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string").put("enum", JSONArray(TermuxBridge.SAFE_PACKAGES.toList()))).put("maxItems", 8)), listOf("packages")))
+            put(tool("git_status", "Show Git status and current branch for the Android project", JSONObject()))
+            put(tool("git_diff", "Show the current unstaged and staged Git diff", JSONObject()))
+            put(tool("run_project_checks", "Detect the project type and run its standard tests/build checks through Termux", JSONObject()))
+        }
     }
     val anthropicDefinitions: JSONArray = JSONArray().apply {
         for (index in 0 until definitions.length()) {
@@ -84,6 +92,19 @@ class AgentToolExecutor(
             "run_command" -> {
                 require(termuxExecutionEnabled) { "Termux execution is disabled in settings" }
                 termuxBridge.run(projectUri, args.getString("command"), args.optLong("timeoutSeconds", 90).coerceIn(1, 180)).display()
+            }
+            "inspect_runtime" -> { require(termuxExecutionEnabled); termuxBridge.inspectRuntime(projectUri).display() }
+            "repair_node_runtime" -> { require(termuxExecutionEnabled); termuxBridge.repairNodeRuntime(projectUri).display() }
+            "install_termux_packages" -> {
+                require(termuxExecutionEnabled)
+                val packages = args.getJSONArray("packages").let { array -> (0 until array.length()).map(array::getString) }
+                termuxBridge.installPackages(projectUri, packages).display()
+            }
+            "git_status" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "git status --short --branch", 60).display() }
+            "git_diff" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "git diff --no-ext-diff; git diff --cached --no-ext-diff", 90).display() }
+            "run_project_checks" -> {
+                require(termuxExecutionEnabled)
+                termuxBridge.run(projectUri, "if [ -f package.json ]; then npm test --if-present && npm run build --if-present; elif [ -f gradlew ]; then sh gradlew test; elif [ -f pyproject.toml ]; then python -m pytest; elif [ -f Cargo.toml ]; then cargo test; elif [ -f go.mod ]; then go test ./...; else echo 'No supported project manifest found'; fi", 180).display()
             }
             else -> "Unknown tool: $name"
         }

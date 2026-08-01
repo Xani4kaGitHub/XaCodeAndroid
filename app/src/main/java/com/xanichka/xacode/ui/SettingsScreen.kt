@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.provider.DocumentsContract
+import com.xanichka.xacode.BuildConfig
 import android.net.Uri
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
@@ -56,6 +57,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -85,6 +87,7 @@ import com.xanichka.xacode.ui.icons.PhIcons
 import com.xanichka.xacode.ui.theme.XaBlue
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private enum class SettingsPage { HOME, MODELS, PROFILE, DEVICE, PERSONALIZATION, TOOLS, APPEARANCE }
@@ -196,7 +199,7 @@ private fun SettingsHome(settings: AppSettings, onModels: () -> Unit, onDevice: 
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrandLogo(62.dp); Spacer(Modifier.width(14.dp))
-                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text(tr(settings.language, "Версия 0.8.0", "Версія 0.8.0", "Version 0.8.0"), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text("XaCode Android", fontSize = 20.sp, fontWeight = FontWeight.Bold); Text(tr(settings.language, "Версия ${BuildConfig.VERSION_NAME}", "Версія ${BuildConfig.VERSION_NAME}", "Version ${BuildConfig.VERSION_NAME}"), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
         item {
@@ -477,8 +480,12 @@ private fun PersonalizationPage(settings: AppSettings, onChange: (AppSettings) -
 @Composable
 private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var permissionRefresh by remember { mutableStateOf(0) }
+    var runtimeBusy by rememberSaveable { mutableStateOf(false) }
+    var runtimeResult by rememberSaveable { mutableStateOf("") }
     val termux = remember(context, permissionRefresh) { TermuxBridge(context) }
+    val termuxProjectUri = settings.projects.firstOrNull()?.treeUri
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -508,7 +515,7 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                 when {
                     !termux.isInstalled() -> "Termux не установлен"
                     !termux.hasPermission() -> "Нужно разрешение RUN_COMMAND"
-                    else -> "Termux подключён"
+                    else -> "Termux подключён · pkg и apt доступны"
                 },
                 "В Termux задайте allow-external-apps=true и выполните termux-setup-storage"
             )
@@ -518,6 +525,60 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                     else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/termux/termux-app/releases")))
                 }) { Text(if (termux.isInstalled()) "Открыть Termux" else "Установить Termux") }
                 if (termux.isInstalled() && !termux.hasPermission()) Button(onClick = { permissionLauncher.launch(TermuxBridge.RUN_PERMISSION) }) { Text("Дать доступ") }
+            }
+            if (termux.isInstalled() && termux.hasPermission()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        enabled = !runtimeBusy && termuxProjectUri != null,
+                        onClick = {
+                            val uri = termuxProjectUri ?: return@OutlinedButton
+                            runtimeBusy = true
+                            runtimeResult = "Диагностика окружения…"
+                            scope.launch {
+                                runtimeResult = withContext(Dispatchers.IO) {
+                                    runCatching { termux.inspectRuntime(uri).display() }
+                                        .getOrElse { it.message ?: "Не удалось проверить Termux" }
+                                }
+                                runtimeBusy = false
+                            }
+                        }
+                    ) { Text("Диагностика") }
+                    Button(
+                        enabled = !runtimeBusy && termuxProjectUri != null,
+                        onClick = {
+                            val uri = termuxProjectUri ?: return@Button
+                            runtimeBusy = true
+                            runtimeResult = "Обновление OpenSSL и Node.js… Это может занять несколько минут."
+                            scope.launch {
+                                runtimeResult = withContext(Dispatchers.IO) {
+                                    runCatching { termux.repairNodeRuntime(uri).display() }
+                                        .getOrElse { it.message ?: "Не удалось восстановить Node.js" }
+                                }
+                                runtimeBusy = false
+                            }
+                        }
+                    ) {
+                        if (runtimeBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        else Text("Починить Node.js")
+                    }
+                }
+                if (termuxProjectUri == null) {
+                    Text("Сначала подключите папку проекта.", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+                if (runtimeResult.isNotBlank()) {
+                    Text(
+                        runtimeResult,
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        maxLines = 12,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Text(
                 "Проект должен быть во внутренней общей памяти. Команды запускаются только после явного включения.",
@@ -532,13 +593,19 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
             InfoRow(PhIcons.Folders, "create · rename · delete", "Управление файлами и папками")
             HorizontalDivider(Modifier.padding(start = 58.dp))
             InfoRow(PhIcons.Sliders, "apply_patch · undo · todos", "Правки, откат и план работы")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Cpu, "inspect_runtime · repair_node_runtime", "Диагностика и автоматический ремонт Node.js/OpenSSL")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Cpu, "run_command · run_project_checks", "Node.js, npm, тесты и сборка через Termux")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.FileCode, "git_status · git_diff · install packages", "Git и установка разрешённых пакетов Termux")
         } }
         item { SettingsSection("СРЕДА ANDROID") {
             InfoRow(PhIcons.Check, "Файловый агент", "Работает через доступ Android к выбранной папке")
             HorizontalDivider(Modifier.padding(start = 58.dp))
             InfoRow(PhIcons.FileCode, "Python 3.13", "Встроен: запуск .py и синхронизация результатов")
             HorizontalDivider(Modifier.padding(start = 58.dp))
-            InfoRow(PhIcons.Cpu, "Node.js и npm", "Нужен runtime или мост с Termux")
+            InfoRow(PhIcons.Cpu, "Node.js и npm", "Работают через Termux; повреждённый OpenSSL чинит repair_node_runtime")
         } }
     }
 }

@@ -31,6 +31,7 @@ data class AppUiState(
     val activeId: String? = null,
     val activeProjectId: String? = null,
     val settings: AppSettings = AppSettings(),
+    val drafts: Map<String, String> = emptyMap(),
     val runningConversations: Map<String, AgentProgress> = emptyMap(),
     val testingProfileId: String? = null,
     val connectionResult: String? = null,
@@ -43,6 +44,8 @@ data class AppUiState(
     val currentProfile: ModelProfile
         get() = settings.profiles.firstOrNull { it.id == activeConversation?.modelProfileId }
             ?: settings.activeProfile
+    val draftKey: String get() = activeId?.let { "chat:$it" } ?: activeProjectId?.let { "project:$it" } ?: "global"
+    val draftText: String get() = drafts[draftKey].orEmpty()
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -75,7 +78,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             conversations = initialConversations,
             activeId = restoredConversationId,
             activeProjectId = restoredProjectId,
-            settings = initialSettings
+            settings = initialSettings,
+            drafts = store.loadDrafts()
         )
     )
     val state = _state.asStateFlow()
@@ -136,22 +140,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun removeProject(id: String, deleteFiles: Boolean = false) {
-        val project = _state.value.settings.projects.firstOrNull { it.id == id } ?: return
+    fun removeProject(id: String) {
+        if (_state.value.settings.projects.none { it.id == id }) return
         _state.value.conversations.filter { it.projectId == id }.forEach { runningJobs.remove(it.id)?.cancel() }
         val settings = _state.value.settings.copy(projects = _state.value.settings.projects.filterNot { it.id == id })
         saveSettings(settings)
         var conversationsToSave: List<Conversation>? = null
+        var draftKeysToRemove: Set<String> = emptySet()
         _state.update { current ->
             val conversations = current.conversations.filterNot { it.projectId == id }
             conversationsToSave = conversations
             val nextProject = current.settings.projects.firstOrNull { it.id != id }?.id
             val removedChatIds = current.conversations.filter { it.projectId == id }.map { it.id }.toSet()
+            val removedDraftKeys = removedChatIds.mapTo(mutableSetOf()) { "chat:$it" }.apply { add("project:$id") }
+            draftKeysToRemove = removedDraftKeys
             store.saveActiveSelection(null, nextProject)
-            current.copy(conversations = conversations, activeProjectId = current.activeProjectId.takeUnless { it == id } ?: nextProject, activeId = current.activeId.takeUnless { it in removedChatIds }, runningConversations = current.runningConversations - removedChatIds)
+            current.copy(conversations = conversations, activeProjectId = current.activeProjectId.takeUnless { it == id } ?: nextProject, activeId = current.activeId.takeUnless { it in removedChatIds }, runningConversations = current.runningConversations - removedChatIds, drafts = current.drafts - removedDraftKeys)
         }
-        viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
-        if (deleteFiles && project.managed) viewModelScope.launch(Dispatchers.IO) { workspace.delete(project.treeUri) }
+        viewModelScope.launch(persistenceDispatcher) {
+            draftKeysToRemove.forEach { store.saveDraft(it, "") }
+            conversationsToSave?.let(store::saveConversations)
+        }
     }
 
     fun finishPermissionOnboarding() = saveSettings(_state.value.settings.copy(permissionOnboardingDone = true))
@@ -222,9 +231,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { current ->
             val updated = current.conversations.filterNot { it.id == id }
             conversationsToSave = updated
-            current.copy(conversations = updated, activeId = if (current.activeId == id) null else current.activeId)
+            current.copy(conversations = updated, activeId = if (current.activeId == id) null else current.activeId, drafts = current.drafts - "chat:$id")
         }
-        viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
+        viewModelScope.launch(persistenceDispatcher) { store.saveDraft("chat:$id", ""); conversationsToSave?.let(store::saveConversations) }
+    }
+
+    fun updateDraft(text: String) {
+        val key = _state.value.draftKey
+        _state.update { current -> current.copy(drafts = if (text.isBlank()) current.drafts - key else current.drafts + (key to text)) }
+        viewModelScope.launch(persistenceDispatcher) { store.saveDraft(key, text) }
     }
 
     fun dismissError() = _state.update { it.copy(error = null) }
@@ -235,13 +250,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(runningConversations = it.runningConversations - id) }
     }
 
-    fun send(text: String, context: String = "") {
+    fun send(text: String, context: String = ""): Boolean {
         val prompt = text.trim()
-        if (prompt.isEmpty()) return
+        if (prompt.isEmpty()) return false
         val snapshot = _state.value
-        if (snapshot.activeId != null && snapshot.runningConversations.containsKey(snapshot.activeId)) return
+        if (snapshot.activeId != null && snapshot.runningConversations.containsKey(snapshot.activeId)) return false
         val projectId = snapshot.activeProjectId ?: snapshot.settings.projects.firstOrNull()?.id
-        if (projectId == null) { _state.update { it.copy(error = "Сначала создайте или подключите проект") }; return }
+        if (projectId == null) { _state.update { it.copy(error = "Сначала создайте или подключите проект") }; return false }
+        val sourceDraftKey = snapshot.draftKey
         val existing = snapshot.activeConversation
         val userMessage = ChatMessage(role = MessageRole.USER, text = prompt, context = context)
         val conversation = if (existing == null) {
@@ -255,9 +271,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             existing.copy(messages = existing.messages + userMessage, updatedAt = System.currentTimeMillis())
         }
         val updated = listOf(conversation) + snapshot.conversations.filterNot { it.id == conversation.id }
-        _state.update { it.copy(conversations = updated, activeId = conversation.id, activeProjectId = conversation.projectId, runningConversations = it.runningConversations + (conversation.id to AgentProgress()), error = null) }
+        _state.update { it.copy(conversations = updated, activeId = conversation.id, activeProjectId = conversation.projectId, runningConversations = it.runningConversations + (conversation.id to AgentProgress()), drafts = it.drafts - sourceDraftKey, error = null) }
         store.saveActiveSelection(conversation.id, conversation.projectId)
-        viewModelScope.launch(persistenceDispatcher) { store.saveConversations(updated) }
+        viewModelScope.launch(persistenceDispatcher) { store.saveDraft(sourceDraftKey, ""); store.saveConversations(updated) }
 
         val job = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             val currentSettings = _state.value.settings
@@ -303,6 +319,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         runningJobs[conversation.id] = job
         job.start()
+        return true
     }
 
     private fun appendAssistant(conversationId: String, answer: AiResult) {

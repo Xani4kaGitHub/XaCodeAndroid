@@ -76,10 +76,26 @@ class TermuxBridge(private val context: Context) {
         }
     }
 
+    fun inspectRuntime(projectUri: String): TermuxCommandResult = run(
+        projectUri,
+        "for tool in bash python node npm git curl tar clang java; do printf '%s: ' \"\$tool\"; if command -v \"\$tool\" >/dev/null 2>&1; then (\"\$tool\" --version 2>&1 | head -n 1) || true; else echo missing; fi; done; pkg --version 2>&1 | head -n 1",
+        120
+    )
+
+    fun repairNodeRuntime(projectUri: String): TermuxCommandResult = run(
+        projectUri,
+        "pkg update -y && pkg upgrade -y && pkg reinstall -y openssl nodejs && hash -r && node --version && npm --version",
+        600
+    )
+
+    fun installPackages(projectUri: String, packages: List<String>): TermuxCommandResult {
+        require(packages.isNotEmpty() && packages.size <= 8) { "Укажите от 1 до 8 пакетов" }
+        require(packages.all { it in SAFE_PACKAGES }) { "Разрешены пакеты: ${SAFE_PACKAGES.joinToString()}" }
+        return run(projectUri, "pkg install -y ${packages.joinToString(" ")}", 600)
+    }
+
     private fun validateCommand(command: String) {
-        val lower = command.lowercase()
-        val blocked = listOf("rm -rf /", "rm -rf /*", "mkfs", "reboot", "shutdown", "su ", "tsu ", "/data/data/", "/system/", "/proc/", "/dev/")
-        require(blocked.none(lower::contains)) { "Команда заблокирована защитой XaCode" }
+        require(!isCommandBlocked(command)) { "Команда заблокирована защитой XaCode" }
     }
 
     companion object {
@@ -88,6 +104,9 @@ class TermuxBridge(private val context: Context) {
         private const val RUN_SERVICE = "com.termux.app.RunCommandService"
         private const val ACTION_RUN_COMMAND = "com.termux.RUN_COMMAND"
         private const val PREFIX = "/data/data/com.termux/files/usr"
+        val SAFE_PACKAGES = sortedSetOf("nodejs", "nodejs-lts", "openssl", "openssl-tool", "git", "python", "clang", "make", "cmake", "rust", "golang", "openjdk-21", "curl", "wget", "tar", "zip", "unzip")
+        private val BLOCKED_COMMAND_PARTS = listOf("rm -rf /", "rm -rf /*", "mkfs", "reboot", "shutdown", "su ", "tsu ", "/data/data/", "/system/", "/proc/", "/dev/")
+        internal fun isCommandBlocked(command: String): Boolean = BLOCKED_COMMAND_PARTS.any(command.lowercase()::contains)
         private const val EXTRA_PATH = "com.termux.RUN_COMMAND_PATH"
         private const val EXTRA_ARGUMENTS = "com.termux.RUN_COMMAND_ARGUMENTS"
         private const val EXTRA_WORKDIR = "com.termux.RUN_COMMAND_WORKDIR"

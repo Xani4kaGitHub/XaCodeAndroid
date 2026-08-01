@@ -161,6 +161,17 @@ class LocalStore(context: Context) {
         preferences.edit().putString("lastConversationId", conversationId).putString("lastProjectId", projectId).apply()
     }
 
+    fun loadDrafts(): Map<String, String> = runCatching {
+        val json = JSONObject(preferences.getString("chatDrafts", "{}"))
+        json.keys().asSequence().associateWith { key -> json.optString(key) }.filterValues { it.isNotBlank() }
+    }.getOrDefault(emptyMap())
+
+    fun saveDraft(key: String, text: String) {
+        val json = runCatching { JSONObject(preferences.getString("chatDrafts", "{}")) }.getOrElse { JSONObject() }
+        if (text.isBlank()) json.remove(key) else json.put(key, text)
+        preferences.edit().putString("chatDrafts", json.toString()).apply()
+    }
+
     fun loadConversations(defaultProfileId: String): List<Conversation> = runCatching {
         val array = JSONArray(preferences.getString("conversations", "[]"))
         (0 until array.length()).map { index ->
