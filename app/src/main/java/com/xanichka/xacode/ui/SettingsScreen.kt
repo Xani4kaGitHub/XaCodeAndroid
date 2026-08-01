@@ -67,6 +67,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -294,6 +296,7 @@ private fun ProfileEditor(
     onDelete: () -> Unit
 ) {
     var showKey by rememberSaveable(profile.id) { mutableStateOf(false) }
+    var contextLimitText by rememberSaveable(profile.id) { mutableStateOf(profile.maxContextTokens.toString()) }
     val activity = LocalContext.current.findActivity()
     DisposableEffect(showKey, activity) {
         if (showKey) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -303,7 +306,7 @@ private fun ProfileEditor(
         item {
             OutlinedTextField(profile.name, { onUpdate(profile.copy(name = it)) }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
         }
-        item { ProviderPicker(profile.provider) { type -> val preset = presetFor(type); onUpdate(profile.copy(provider = type, name = preset.label, baseUrl = preset.baseUrl, model = preset.defaultModel)) } }
+        item { ProviderPicker(profile.provider) { type -> val preset = presetFor(type); contextLimitText = preset.defaultContextTokens.toString(); onUpdate(profile.copy(provider = type, name = preset.label, baseUrl = preset.baseUrl, model = preset.defaultModel, maxContextTokens = preset.defaultContextTokens)) } }
         item { OutlinedTextField(profile.baseUrl, { onUpdate(profile.copy(baseUrl = it)) }, label = { Text("Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) }
         item {
             OutlinedTextField(profile.model, { onUpdate(profile.copy(model = it)) }, label = { Text("ID модели") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
@@ -317,6 +320,21 @@ private fun ProfileEditor(
                     }
                 }
             }
+        }
+        item {
+            OutlinedTextField(
+                value = contextLimitText,
+                onValueChange = { value ->
+                    contextLimitText = value.filter(Char::isDigit).take(7)
+                    contextLimitText.toIntOrNull()?.coerceIn(1_024, 2_000_000)?.let { onUpdate(profile.copy(maxContextTokens = it)) }
+                },
+                label = { Text("Контекст чата, токенов") },
+                supportingText = { Text("Отдельный лимит этой модели. Старые сообщения автоматически сжимаются, свежие сохраняются полностью.") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            )
         }
         item {
             OutlinedTextField(

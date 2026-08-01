@@ -8,12 +8,14 @@ import com.xanichka.xacode.model.ProviderType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 data class AiResult(val text: String, val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0)
 data class AgentProgress(val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val currentTool: String = "")
 
 class AiClient {
-    fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null, onProgress: (AgentProgress) -> Unit = {}): AiResult {
+    suspend fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null, onProgress: (AgentProgress) -> Unit = {}): AiResult {
         NetworkSecurity.apiUrl(profile.baseUrl)
         require(profile.model.isNotBlank() || profile.model == "-") { "Укажите модель в настройках" }
         val systemPrompt = buildString {
@@ -41,13 +43,13 @@ class AiClient {
         }
     }
 
-    fun testConnection(settings: AppSettings, profile: ModelProfile): String = complete(
+    suspend fun testConnection(settings: AppSettings, profile: ModelProfile): String = complete(
         settings,
         profile,
         listOf(ChatMessage(role = MessageRole.USER, text = "Ответь одним словом: OK"))
     ).text
 
-    private fun completeOpenAi(
+    private suspend fun completeOpenAi(
         settings: AppSettings,
         profile: ModelProfile,
         systemPrompt: String,
@@ -91,7 +93,8 @@ class AiClient {
                     else -> Unit
                 }
             }
-        repeat(8) {
+        repeat(MAX_TOOL_ROUNDS) {
+            currentCoroutineContext().ensureActive()
             val response = request(openAiEndpoint(profile.baseUrl), headers, payload)
             val root = JSONObject(response)
             val usage = root.optJSONObject("usage")
@@ -108,10 +111,17 @@ class AiClient {
                 bodyMessages.put(JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content", tools.execute(function.getString("name"), function.optString("arguments", "{}"))))
             }
         }
-        return AiResult("Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта.", totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+        payload.remove("tools"); payload.remove("tool_choice")
+        bodyMessages.put(JSONObject().put("role", "system").put("content", "Лимит вызовов инструментов исчерпан. Не вызывай инструменты снова: кратко подведи итог выполненного, укажи реальные результаты и что осталось."))
+        val finalRoot = JSONObject(request(openAiEndpoint(profile.baseUrl), headers, payload))
+        val finalUsage = finalRoot.optJSONObject("usage")
+        totalInputTokens += finalUsage?.optInt("prompt_tokens", 0) ?: 0
+        totalOutputTokens += finalUsage?.optInt("completion_tokens", 0) ?: 0
+        val finalText = finalRoot.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty()
+        return AiResult(finalText.ifBlank { "Работа завершена. Откройте файлы проекта, чтобы проверить изменения." }, totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
     }
 
-    private fun completeAnthropic(
+    private suspend fun completeAnthropic(
         settings: AppSettings,
         profile: ModelProfile,
         systemPrompt: String,
@@ -133,7 +143,7 @@ class AiClient {
         val payload = JSONObject()
             .put("system", systemPrompt)
             .put("messages", bodyMessages)
-            .put("max_tokens", profile.maxContextTokens.coerceIn(1_024, 16_384))
+            .put("max_tokens", (profile.maxContextTokens / 4).coerceIn(1_024, 4_096))
         if (tools != null) payload.put("tools", tools.anthropicDefinitions)
         if (profile.model != "-") payload.put("model", profile.model)
         if (settings.temperatureEnabled) payload.put("temperature", settings.temperature.toDouble())
@@ -149,7 +159,8 @@ class AiClient {
                     put("Version", "0.101.0")
                 }
             }
-        repeat(8) {
+        repeat(MAX_TOOL_ROUNDS) {
+            currentCoroutineContext().ensureActive()
             val response = request(anthropicEndpoint(profile.baseUrl), headers, payload)
             val root = JSONObject(response)
             val usage = root.optJSONObject("usage")
@@ -165,10 +176,19 @@ class AiClient {
             toolUses.forEach { use -> results.put(JSONObject().put("type", "tool_result").put("tool_use_id", use.getString("id")).put("content", tools.execute(use.getString("name"), use.optJSONObject("input")?.toString() ?: "{}"))) }
             bodyMessages.put(JSONObject().put("role", "user").put("content", results))
         }
-        return AiResult("Остановлено после 8 шагов инструментов. Проверьте результат в файлах проекта.", totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+        payload.remove("tools")
+        bodyMessages.put(JSONObject().put("role", "user").put("content", "Лимит вызовов инструментов исчерпан. Не вызывай инструменты снова: кратко подведи итог выполненного, укажи реальные результаты и что осталось."))
+        val finalRoot = JSONObject(request(anthropicEndpoint(profile.baseUrl), headers, payload))
+        val finalUsage = finalRoot.optJSONObject("usage")
+        totalInputTokens += finalUsage?.optInt("input_tokens", 0) ?: 0
+        totalOutputTokens += finalUsage?.optInt("output_tokens", 0) ?: 0
+        val finalContent = finalRoot.optJSONArray("content") ?: JSONArray()
+        val finalText = (0 until finalContent.length()).mapNotNull { index -> finalContent.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim()
+        return AiResult(finalText.ifBlank { "Работа завершена. Откройте файлы проекта, чтобы проверить изменения." }, totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
     }
 
-    private fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
+    private suspend fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
+        currentCoroutineContext().ensureActive()
         val connection = NetworkSecurity.apiUrl(url).openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = "POST"
@@ -181,6 +201,7 @@ class AiClient {
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val response = NetworkSecurity.readLimited(stream, 8 * 1024 * 1024)
             if (code !in 200..299) error(extractError(response).ifBlank { "API вернул ошибку $code" })
+            currentCoroutineContext().ensureActive()
             response
         } finally {
             connection.disconnect()
@@ -209,4 +230,6 @@ class AiClient {
     private fun usesAnthropicFormat(profile: ModelProfile): Boolean =
         profile.provider == ProviderType.ANTHROPIC ||
             (profile.provider == ProviderType.AGENTROUTER && profile.model.contains("claude", ignoreCase = true))
+
+    private companion object { const val MAX_TOOL_ROUNDS = 16 }
 }

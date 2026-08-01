@@ -8,7 +8,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,11 +15,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.R
 import com.xanichka.xacode.model.ProviderType
+import com.xanichka.xacode.ui.icons.PhIcons
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 
 @Composable
 fun BrandLogo(size: Dp = 44.dp) {
@@ -42,19 +40,19 @@ fun CircleIconButton(icon: ImageVector, description: String, onClick: () -> Unit
 
 @Composable
 fun ProviderBadge(provider: ProviderType, size: Dp = 42.dp, selected: Boolean = false) {
-    val (label, color) = when (provider) {
-        ProviderType.DEEPSEEK -> "DS" to Color(0xFF4D8DFF)
-        ProviderType.OPENAI -> "◎" to Color(0xFF10A37F)
-        ProviderType.ANTHROPIC -> "AI" to Color(0xFFD97757)
-        ProviderType.GOOGLE -> "✦" to Color(0xFF4285F4)
-        ProviderType.OPENROUTER -> "OR" to Color(0xFF7C6CFF)
-        ProviderType.AGENTROUTER -> "AR" to Color(0xFF3BAF91)
-        ProviderType.OLLAMA -> "OL" to Color(0xFF8B8FA3)
-        ProviderType.CUSTOM -> "<>" to Color(0xFFCBA6F7)
+    val (icon, color) = when (provider) {
+        ProviderType.DEEPSEEK -> PhIcons.DeepSeek to Color(0xFF4D8DFF)
+        ProviderType.OPENAI -> PhIcons.OpenAi to Color(0xFF10A37F)
+        ProviderType.ANTHROPIC -> PhIcons.Anthropic to Color(0xFFD97757)
+        ProviderType.GOOGLE -> PhIcons.Gemini to Color(0xFF4285F4)
+        ProviderType.OPENROUTER -> PhIcons.OpenRouter to Color(0xFF7C6CFF)
+        ProviderType.AGENTROUTER -> PhIcons.OpenRouter to Color(0xFF3BAF91)
+        ProviderType.OLLAMA -> PhIcons.Cpu to Color(0xFF8B8FA3)
+        ProviderType.CUSTOM -> PhIcons.FileCode to Color(0xFFCBA6F7)
     }
     Surface(modifier = Modifier.size(size), shape = CircleShape, color = color.copy(alpha = if (selected) .24f else .14f)) {
         Box(contentAlignment = Alignment.Center) {
-            Text(label, color = color, fontSize = (size.value * .31f).sp, fontWeight = FontWeight.ExtraBold)
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(size * .56f))
         }
     }
 }

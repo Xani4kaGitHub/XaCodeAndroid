@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -104,6 +105,7 @@ fun ChatScreen(
     state: AppUiState,
     onProfileSelected: (String) -> Unit,
     onSend: (String, String) -> Unit,
+    onCancel: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenProjectFiles: () -> Unit = {},
     onOpenModelSettings: () -> Unit = {}
@@ -218,7 +220,7 @@ fun ChatScreen(
                         cursorBrush = SolidColor(XaBlue),
                         minLines = 1, maxLines = 5,
                         keyboardActions = KeyboardActions(onSend = {
-                            if (input.isNotBlank()) {
+                            if (input.isNotBlank() && !state.isSending) {
                                 val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
                                 onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
                             }
@@ -230,7 +232,7 @@ fun ChatScreen(
                             Icon(PhIcons.Plus, "Добавить файл", Modifier.size(22.dp))
                         }
                         Surface(
-                            modifier = Modifier.clickable(enabled = !state.isSending) { showModels = true },
+                            modifier = Modifier.clickable { showModels = true },
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
@@ -242,18 +244,20 @@ fun ChatScreen(
                         }
                         Spacer(Modifier.weight(1f))
                         Surface(
-                            color = if (input.isNotBlank() && !state.isSending) XaBlue else MaterialTheme.colorScheme.surfaceVariant,
+                            color = if (state.isSending) MaterialTheme.colorScheme.error else if (input.isNotBlank()) XaBlue else MaterialTheme.colorScheme.surfaceVariant,
                             shape = CircleShape,
                             modifier = Modifier.size(42.dp)
                         ) {
                             IconButton(
-                                enabled = input.isNotBlank() && !state.isSending,
+                                enabled = state.isSending || input.isNotBlank(),
                                 onClick = {
-                                    val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
-                                    onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
+                                    if (state.isSending) onCancel() else {
+                                        val fileContext = attachments.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }
+                                        onSend(expandSlashPrompt(input), fileContext); input = ""; attachments.clear(); focusManager.clearFocus()
+                                    }
                                 }
                             ) {
-                                Icon(PhIcons.Send, tr(state.settings.language, "Отправить", "Надіслати", "Send"), Modifier.size(20.dp), tint = if (input.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(if (state.isSending) PhIcons.Stop else PhIcons.Send, if (state.isSending) "Остановить" else tr(state.settings.language, "Отправить", "Надіслати", "Send"), Modifier.size(20.dp), tint = if (state.isSending || input.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -525,28 +529,57 @@ private fun inlineMarkdown(text: String) = buildAnnotatedString {
     append(text.substring(cursor))
 }
 
-private fun prettyMath(source: String): String {
-    var value = source
-    val fractions = Regex("\\\\frac\\{([^{}]+)}\\{([^{}]+)}")
-    while (fractions.containsMatchIn(value)) value = fractions.replace(value) { "(${it.groupValues[1]})⁄(${it.groupValues[2]})" }
+internal fun prettyMath(source: String): String {
+    var value = replaceMathCommand(source, "\\frac", 2) { args -> "(${prettyMath(args[0])})⁄(${prettyMath(args[1])})" }
+    value = replaceMathCommand(value, "\\sqrt", 1) { args -> "√(${prettyMath(args[0])})" }
     return value
-        .replace(Regex("\\\\sqrt\\{([^{}]+)}")) { "√(${it.groupValues[1]})" }
-        .replace("\\\\times", "×").replace("\\\\div", "÷").replace("\\\\cdot", "·")
-        .replace("\\\\le", "≤").replace("\\\\ge", "≥").replace("\\\\ne", "≠")
-        .replace("\\\\pi", "π").replace("\\\\infty", "∞")
-        .replace("^{2}", "²").replace("^2", "²").replace("^{3}", "³").replace("^3", "³")
+        .replace("\\times", "×").replace("\\div", "÷").replace("\\cdot", "·")
+        .replace("\\pm", "±").replace("\\approx", "≈").replace("\\equiv", "≡")
+        .replace("\\leq", "≤").replace("\\le", "≤").replace("\\geq", "≥").replace("\\ge", "≥").replace("\\neq", "≠").replace("\\ne", "≠")
+        .replace("\\alpha", "α").replace("\\beta", "β").replace("\\gamma", "γ").replace("\\theta", "θ").replace("\\lambda", "λ")
+        .replace("\\sum", "∑").replace("\\prod", "∏").replace("\\int", "∫").replace("\\partial", "∂")
+        .replace("\\pi", "π").replace("\\infty", "∞").replace("\\rightarrow", "→").replace("\\Rightarrow", "⇒")
+        .replace("^{0}", "⁰").replace("^{1}", "¹").replace("^{2}", "²").replace("^{3}", "³")
+        .replace("^0", "⁰").replace("^1", "¹").replace("^2", "²").replace("^3", "³")
+}
+
+/** Parses braced LaTeX commands without Android ICU regex, including nested braces. */
+private fun replaceMathCommand(source: String, command: String, argumentCount: Int, render: (List<String>) -> String): String {
+    var value = source
+    var from = 0
+    while (true) {
+        val start = value.indexOf(command, from)
+        if (start < 0) return value
+        var cursor = start + command.length
+        val arguments = mutableListOf<String>()
+        repeat(argumentCount) {
+            while (cursor < value.length && value[cursor].isWhitespace()) cursor++
+            if (cursor >= value.length || value[cursor] != '{') return@repeat
+            var depth = 1
+            var end = cursor + 1
+            while (end < value.length && depth > 0) {
+                if (value[end] == '{') depth++ else if (value[end] == '}') depth--
+                end++
+            }
+            if (depth == 0) { arguments += value.substring(cursor + 1, end - 1); cursor = end }
+        }
+        if (arguments.size != argumentCount) { from = start + command.length; continue }
+        value = value.replaceRange(start, cursor, render(arguments))
+        from = start
+    }
 }
 
 @Composable
 private fun CodeBlock(language: String, code: String) {
     val clipboard = LocalClipboardManager.current
-    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .55f))) {
         Column {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(language.ifBlank { "code" }, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
-                TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }, contentPadding = PaddingValues(4.dp)) { Icon(PhIcons.Copy, "Копировать код", Modifier.size(15.dp)) }
+            Row(Modifier.fillMaxWidth().padding(start = 13.dp, end = 7.dp, top = 5.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(language.ifBlank { "code" }.uppercase(), Modifier.weight(1f), color = XaBlue, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
+                TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)) { Icon(PhIcons.Copy, "Копировать код", Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text("Копировать", fontSize = 10.sp) }
             }
-            Text(code, Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp), fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp)
+            androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .45f))
+            SelectionContainer { Text(code, Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(13.dp), fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp) }
         }
     }
 }

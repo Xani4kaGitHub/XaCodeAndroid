@@ -119,7 +119,6 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
                     activeId = state.activeId,
                     activeProjectId = state.activeProjectId,
                     settings = state.settings,
-                    onNewChat = { viewModel.newChat(null); scope.launch { drawerState.close() } },
                     onSelectProject = { viewModel.selectProject(it); scope.launch { drawerState.close() } },
                     onNewProject = {
                         if (state.settings.projectsRootUri.isBlank()) {
@@ -148,7 +147,7 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
                 )
             }) { padding ->
                 ChatScreen(
-                    state, viewModel::selectProfile, viewModel::send, Modifier.padding(padding),
+                    state, viewModel::selectProfile, viewModel::send, { viewModel.cancelGeneration() }, Modifier.padding(padding),
                     onOpenProjectFiles = { showFiles = true },
                     onOpenModelSettings = { openModelSettings = true; showSettings = true }
                 )
@@ -193,12 +192,14 @@ private fun ChatHeader(title: String, subtitle: String, language: com.xanichka.x
 @Composable
 private fun AppDrawer(
     conversations: List<Conversation>, projects: List<ProjectWorkspace>, activeId: String?, activeProjectId: String?, settings: AppSettings,
-    onNewChat: () -> Unit, onSelectProject: (String) -> Unit, onNewProject: () -> Unit, onAddExternalProject: () -> Unit, onNewProjectChat: (String) -> Unit, onSelect: (String) -> Unit,
+    onSelectProject: (String) -> Unit, onNewProject: () -> Unit, onAddExternalProject: () -> Unit, onNewProjectChat: (String) -> Unit, onSelect: (String) -> Unit,
     onDelete: (String) -> Unit, onDeleteProject: (String, Boolean) -> Unit, onSettings: () -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var showProjectCreation by remember { mutableStateOf(false) }
-    val visible = remember(conversations, query) { conversations.filter { (query.isNotBlank() && it.title.contains(query, true)) || (query.isBlank() && it.projectId == null) } }
+    val visibleProjects = remember(projects, conversations, query) {
+        if (query.isBlank()) projects else projects.filter { project -> project.name.contains(query, true) || conversations.any { it.projectId == project.id && it.title.contains(query, true) } }
+    }
     ModalDrawerSheet(Modifier.width(342.dp), drawerContainerColor = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -221,19 +222,16 @@ private fun AppDrawer(
             }
             OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 14.dp), placeholder = { Text(tr(settings.language, "Поиск в чатах", "Пошук у чатах", "Search chats")) }, leadingIcon = { Icon(PhIcons.Search, null, Modifier.size(19.dp)) }, singleLine = true, shape = RoundedCornerShape(24.dp))
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)) {
-                item { DrawerAction(PhIcons.Chat, tr(settings.language, "Новый чат", "Новий чат", "New chat"), tr(settings.language, "Без папки", "Без папки", "No folder"), onNewChat) }
                 item { Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) { Text(tr(settings.language, "ПРОЕКТЫ", "ПРОЄКТИ", "PROJECTS"), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp); IconButton(onClick = onNewProject) { Icon(PhIcons.Plus, tr(settings.language, "Добавить проект", "Додати проєкт", "Add project"), Modifier.size(19.dp)) } } }
-                items(projects, key = { "project-${it.id}" }) { project ->
+                items(visibleProjects, key = { "project-${it.id}" }) { project ->
                     Column {
                         ProjectDrawerRow(project, conversations.count { it.projectId == project.id }, activeProjectId == project.id, settings.language, { onSelectProject(project.id) }, { onNewProjectChat(project.id) }, onDeleteProject)
-                        conversations.filter { it.projectId == project.id }.take(4).forEach { conversation -> NestedConversationRow(conversation, conversation.id == activeId) { onSelect(conversation.id) } }
+                        conversations.filter { it.projectId == project.id && (query.isBlank() || it.title.contains(query, true)) }.forEach { conversation ->
+                            NestedConversationRow(conversation, conversation.id == activeId, { onSelect(conversation.id) }, { onDelete(conversation.id) })
+                        }
                     }
                 }
                 item { TextButton(onClick = onAddExternalProject, Modifier.padding(horizontal = 12.dp)) { Icon(PhIcons.Paperclip, null, Modifier.size(17.dp)); Spacer(Modifier.width(7.dp)); Text(tr(settings.language, "Подключить другую папку", "Підключити іншу папку", "Connect another folder")) } }
-                item { Text(tr(settings.language, "ЧАТЫ", "ЧАТИ", "CHATS"), Modifier.padding(start = 18.dp, top = 12.dp, bottom = 5.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = .9.sp) }
-                items(visible, key = { it.id }) { conversation ->
-                    Box(Modifier.padding(horizontal = 8.dp)) { DrawerConversationRow(conversation, settings.profiles.firstOrNull { it.id == conversation.modelProfileId }?.name ?: "Модель", conversation.id == activeId, { onSelect(conversation.id) }, { onDelete(conversation.id) }) }
-                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .3f))
             DrawerAction(PhIcons.Settings, tr(settings.language, "Настройки", "Налаштування", "Settings"), tr(settings.language, "Модели, API и доступ", "Моделі, API та доступ", "Models, API and access"), onSettings)
@@ -242,10 +240,17 @@ private fun AppDrawer(
 }
 
 @Composable
-private fun NestedConversationRow(conversation: Conversation, selected: Boolean, onClick: () -> Unit) {
+private fun NestedConversationRow(conversation: Conversation, selected: Boolean, onClick: () -> Unit, onDelete: () -> Unit) {
+    var expanded by remember(conversation.id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 38.dp, end = 10.dp).background(if (selected) XaSurfaceHigh else MaterialTheme.colorScheme.background, RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(conversation.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
         if (selected) Surface(Modifier.size(6.dp), shape = androidx.compose.foundation.shape.CircleShape, color = XaBlue) {}
+        Box {
+            IconButton(onClick = { expanded = true }, modifier = Modifier.size(34.dp)) { Icon(PhIcons.More, "Действия", Modifier.size(17.dp)) }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(text = { Text("Удалить чат") }, leadingIcon = { Icon(PhIcons.Trash, null) }, onClick = { expanded = false; onDelete() })
+            }
+        }
     }
 }
 

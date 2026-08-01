@@ -94,7 +94,8 @@ class TermuxBridge(private val context: Context) {
         private const val EXTRA_BACKGROUND = "com.termux.RUN_COMMAND_BACKGROUND"
         private const val EXTRA_LABEL = "com.termux.RUN_COMMAND_COMMAND_LABEL"
         private const val EXTRA_PENDING_INTENT = "com.termux.RUN_COMMAND_PENDING_INTENT"
-        internal const val EXTRA_RESULT_BUNDLE = "com.termux.plugin.EXTRA_PLUGIN_RESULT_BUNDLE"
+        // TermuxConstants.TERMUX_SERVICE.EXTRA_PLUGIN_RESULT_BUNDLE is exactly "result".
+        internal const val EXTRA_RESULT_BUNDLE = "result"
         internal const val EXTRA_STDOUT = "stdout"
         internal const val EXTRA_STDERR = "stderr"
         internal const val EXTRA_EXIT_CODE = "exitCode"

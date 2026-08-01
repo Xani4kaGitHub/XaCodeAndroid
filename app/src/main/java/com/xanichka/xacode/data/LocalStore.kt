@@ -9,6 +9,7 @@ import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
 import com.xanichka.xacode.model.UiLanguage
+import com.xanichka.xacode.model.presetFor
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -32,7 +33,7 @@ class LocalStore(context: Context) {
                     apiKey = secrets.readApiKey(id),
                     baseUrl = item.optString("baseUrl"),
                     model = item.optString("model"),
-                    maxContextTokens = item.optInt("maxContextTokens", 32_000).coerceAtLeast(1_024),
+                    maxContextTokens = item.optInt("maxContextTokens", presetFor(runCatching { ProviderType.valueOf(item.optString("provider")) }.getOrDefault(ProviderType.CUSTOM)).defaultContextTokens).coerceAtLeast(1_024),
                     showReasoning = item.optBoolean("showReasoning", false),
                     reasoningEffort = item.optString("reasoningEffort", "high")
                 )
@@ -147,6 +148,12 @@ class LocalStore(context: Context) {
     }
 
     fun deleteProfileSecret(profileId: String) = secrets.deleteApiKey(profileId)
+
+    fun loadActiveConversationId(): String? = preferences.getString("lastConversationId", null)
+    fun loadActiveProjectId(): String? = preferences.getString("lastProjectId", null)
+    fun saveActiveSelection(conversationId: String?, projectId: String?) {
+        preferences.edit().putString("lastConversationId", conversationId).putString("lastProjectId", projectId).apply()
+    }
 
     fun loadConversations(defaultProfileId: String): List<Conversation> = runCatching {
         val array = JSONArray(preferences.getString("conversations", "[]"))
