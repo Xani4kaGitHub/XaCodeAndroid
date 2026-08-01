@@ -77,6 +77,8 @@ import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.data.TermuxBridge
+import com.xanichka.xacode.data.ChatGptAuth
+import com.xanichka.xacode.data.ChatGptOAuthClient
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
@@ -300,6 +302,11 @@ private fun ProfileEditor(
 ) {
     var showKey by rememberSaveable(profile.id) { mutableStateOf(false) }
     var contextLimitText by rememberSaveable(profile.id) { mutableStateOf(profile.maxContextTokens.toString()) }
+    var oauthCode by rememberSaveable(profile.id) { mutableStateOf("") }
+    var oauthBusy by rememberSaveable(profile.id) { mutableStateOf(false) }
+    var oauthError by rememberSaveable(profile.id) { mutableStateOf("") }
+    val oauthScope = rememberCoroutineScope()
+    val context = LocalContext.current
     val activity = LocalContext.current.findActivity()
     DisposableEffect(showKey, activity) {
         if (showKey) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -309,8 +316,8 @@ private fun ProfileEditor(
         item {
             OutlinedTextField(profile.name, { onUpdate(profile.copy(name = it)) }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
         }
-        item { ProviderPicker(profile.provider) { type -> val preset = presetFor(type); contextLimitText = preset.defaultContextTokens.toString(); onUpdate(profile.copy(provider = type, name = preset.label, baseUrl = preset.baseUrl, model = preset.defaultModel, maxContextTokens = preset.defaultContextTokens)) } }
-        item { OutlinedTextField(profile.baseUrl, { onUpdate(profile.copy(baseUrl = it)) }, label = { Text("Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) }
+        item { ProviderPicker(profile.provider) { type -> val preset = presetFor(type); contextLimitText = preset.defaultContextTokens.toString(); onUpdate(profile.copy(provider = type, name = preset.label, apiKey = "", baseUrl = preset.baseUrl, model = preset.defaultModel, maxContextTokens = preset.defaultContextTokens, reasoningEffort = if (type == ProviderType.CHATGPT) "medium" else profile.reasoningEffort, serviceTier = "standard")) } }
+        item { OutlinedTextField(profile.baseUrl, { onUpdate(profile.copy(baseUrl = it)) }, enabled = profile.provider != ProviderType.CHATGPT, label = { Text("Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) }
         item {
             OutlinedTextField(profile.model, { onUpdate(profile.copy(model = it)) }, label = { Text("ID модели") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
             val models = presetFor(profile.provider).models
@@ -323,6 +330,18 @@ private fun ProfileEditor(
                     }
                 }
             }
+        }
+        item {
+            Text("Усилие", fontWeight = FontWeight.SemiBold)
+            val efforts = listOf("low" to "Лёгкий", "medium" to "Средний", "high" to "Высокий", "xhigh" to "Очень высокий", "ultra" to "Ультра")
+            FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                efforts.forEach { (id, label) ->
+                    Surface(Modifier.clickable { onUpdate(profile.copy(reasoningEffort = id)) }, shape = RoundedCornerShape(10.dp), color = if (profile.reasoningEffort == id) XaBlue.copy(alpha = .2f) else MaterialTheme.colorScheme.surface) {
+                        Text(label, Modifier.padding(horizontal = 9.dp, vertical = 7.dp), color = if (profile.reasoningEffort == id) XaBlue else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp)
+                    }
+                }
+            }
+            if (profile.provider == ProviderType.CHATGPT) Text("Скорость: стандарт", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
         item {
             OutlinedTextField(
@@ -339,7 +358,46 @@ private fun ProfileEditor(
                 shape = RoundedCornerShape(14.dp)
             )
         }
-        item {
+        if (profile.provider == ProviderType.CHATGPT) item {
+            val account = remember(profile.apiKey) { runCatching { ChatGptAuth.decode(profile.apiKey) }.getOrNull() }
+            Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("ChatGPT OAuth", fontWeight = FontWeight.Bold)
+                    Text(
+                        account?.let { listOf(it.email, it.planType).filter(String::isNotBlank).joinToString(" · ").ifBlank { "Аккаунт подключён" } }
+                            ?: "API-ключ не нужен. Вход использует доступ Codex вашего аккаунта ChatGPT.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
+                    if (oauthCode.isNotBlank()) Text("Код: $oauthCode", color = XaBlue, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Button(
+                        enabled = !oauthBusy,
+                        onClick = {
+                            oauthBusy = true; oauthError = ""; oauthCode = ""
+                            oauthScope.launch {
+                                runCatching {
+                                    val client = ChatGptOAuthClient()
+                                    val device = withContext(Dispatchers.IO) { client.requestDeviceCode() }
+                                    oauthCode = device.userCode
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(device.verificationUrl)))
+                                    withContext(Dispatchers.IO) { client.completeDeviceLogin(device) }
+                                }.onSuccess { auth ->
+                                    onUpdate(profile.copy(apiKey = auth.encode())); oauthCode = ""
+                                }.onFailure { oauthError = it.message ?: "Не удалось войти через ChatGPT" }
+                                oauthBusy = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (oauthBusy) CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 2.dp) else Icon(PhIcons.OpenAi, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp)); Text(if (account == null) "Войти через ChatGPT" else "Войти в другой аккаунт")
+                    }
+                    if (account != null) TextButton(onClick = { onUpdate(profile.copy(apiKey = "")) }, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
+                    if (oauthError.isNotBlank()) Text(oauthError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+            }
+        } else item {
             OutlinedTextField(
                 profile.apiKey,
                 { onUpdate(profile.copy(apiKey = it)) },
@@ -354,7 +412,7 @@ private fun ProfileEditor(
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                Button(onClick = { onTest(profile) }, enabled = !testing && profile.baseUrl.isNotBlank() && profile.model.isNotBlank(), modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) {
+                Button(onClick = { onTest(profile) }, enabled = !testing && profile.baseUrl.isNotBlank() && profile.model.isNotBlank() && (profile.provider != ProviderType.CHATGPT || profile.apiKey.isNotBlank()), modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) {
                     if (testing) CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 2.dp) else Icon(PhIcons.Cpu, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(7.dp)); Text("Проверить")
                 }

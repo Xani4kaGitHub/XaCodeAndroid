@@ -3,7 +3,7 @@ package com.xanichka.xacode.model
 import androidx.compose.runtime.Immutable
 import java.util.UUID
 
-enum class ProviderType { DEEPSEEK, OPENAI, ANTHROPIC, GOOGLE, OPENROUTER, AGENTROUTER, OLLAMA, CUSTOM }
+enum class ProviderType { DEEPSEEK, OPENAI, CHATGPT, ANTHROPIC, GOOGLE, OPENROUTER, AGENTROUTER, OLLAMA, CUSTOM }
 
 enum class UiLanguage(val label: String) {
     RUSSIAN("Русский"),
@@ -20,12 +20,14 @@ data class ProviderPreset(
     val models: List<String>,
     val defaultContextTokens: Int,
     val anthropicFormat: Boolean = false,
-    val apiKeyOptional: Boolean = false
+    val apiKeyOptional: Boolean = false,
+    val oauth: Boolean = false
 )
 
 val providerPresets = listOf(
     ProviderPreset(ProviderType.DEEPSEEK, "DeepSeek", "https://api.deepseek.com", "deepseek-v4-flash", listOf("deepseek-v4-flash", "deepseek-v4-pro"), 1_000_000),
     ProviderPreset(ProviderType.OPENAI, "OpenAI", "https://api.openai.com/v1", "gpt-5.1", listOf("gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"), 400_000),
+    ProviderPreset(ProviderType.CHATGPT, "ChatGPT OAuth", "https://chatgpt.com/backend-api/codex", "gpt-5.6-sol", listOf("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"), 372_000, apiKeyOptional = true, oauth = true),
     ProviderPreset(ProviderType.ANTHROPIC, "Anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", listOf("claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"), 1_000_000, anthropicFormat = true),
     ProviderPreset(ProviderType.GOOGLE, "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-3.6-flash", listOf("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"), 1_000_000),
     ProviderPreset(ProviderType.OPENROUTER, "OpenRouter", "https://openrouter.ai/api/v1", "deepseek/deepseek-v4-flash", listOf("deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", "openai/gpt-5.1", "anthropic/claude-sonnet-5", "google/gemini-3.6-flash"), 1_000_000),
@@ -60,7 +62,52 @@ data class ModelProfile(
     val model: String = "deepseek-v4-flash",
     val maxContextTokens: Int = 1_000_000,
     val showReasoning: Boolean = false,
-    val reasoningEffort: String = "high"
+    val reasoningEffort: String = "high",
+    val serviceTier: String = "standard"
+)
+
+/** Immutable routing data captured when the first message creates a conversation. */
+@Immutable
+data class ConversationModelBinding(
+    val credentialProfileId: String,
+    val profileName: String,
+    val provider: ProviderType,
+    val baseUrl: String,
+    val model: String,
+    val maxContextTokens: Int,
+    val showReasoning: Boolean,
+    val reasoningEffort: String,
+    val serviceTier: String = "standard"
+) {
+    fun resolveCredential(profiles: List<ModelProfile>): ModelProfile {
+        val credential = profiles.firstOrNull { it.id == credentialProfileId }
+            ?: error("Профиль авторизации этого чата удалён. Восстановите профиль или создайте новый чат")
+        require(credential.provider == provider) { "Провайдер профиля авторизации этого чата был изменён. Создайте новый чат" }
+        return ModelProfile(
+            id = credentialProfileId,
+            name = profileName,
+            provider = provider,
+            apiKey = credential.apiKey,
+            baseUrl = baseUrl,
+            model = model,
+            maxContextTokens = maxContextTokens,
+            showReasoning = showReasoning,
+            reasoningEffort = reasoningEffort,
+            serviceTier = serviceTier
+        )
+    }
+}
+
+fun ModelProfile.toConversationBinding() = ConversationModelBinding(
+    credentialProfileId = id,
+    profileName = name,
+    provider = provider,
+    baseUrl = baseUrl,
+    model = model,
+    maxContextTokens = maxContextTokens,
+    showReasoning = showReasoning,
+    reasoningEffort = reasoningEffort,
+    serviceTier = serviceTier
 )
 
 @Immutable
@@ -137,6 +184,7 @@ data class Conversation(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "Новый чат",
     val modelProfileId: String = "deepseek-default",
+    val modelBinding: ConversationModelBinding? = null,
     val projectId: String? = null,
     val messages: List<ChatMessage> = emptyList(),
     val updatedAt: Long = System.currentTimeMillis()

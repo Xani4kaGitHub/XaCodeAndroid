@@ -2,6 +2,7 @@ package com.xanichka.xacode.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.xanichka.xacode.data.AiClient
 import com.xanichka.xacode.data.AgentToolExecutor
@@ -18,6 +19,7 @@ import com.xanichka.xacode.model.Conversation
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProjectWorkspace
+import com.xanichka.xacode.model.toConversationBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -43,15 +45,17 @@ data class AppUiState(
     val isSending: Boolean get() = activeId != null && runningConversations.containsKey(activeId)
     val agentProgress: AgentProgress get() = activeId?.let(runningConversations::get) ?: AgentProgress()
     val currentProfile: ModelProfile
-        get() = settings.profiles.firstOrNull { it.id == activeConversation?.modelProfileId }
+        get() = activeConversation?.modelBinding?.let { binding ->
+            runCatching { binding.resolveCredential(settings.profiles) }.getOrNull()
+        } ?: settings.profiles.firstOrNull { it.id == activeConversation?.modelProfileId }
             ?: settings.activeProfile
     val draftKey: String get() = activeId?.let { "chat:$it" } ?: activeProjectId?.let { "project:$it" } ?: "global"
     val draftText: String get() = drafts[draftKey].orEmpty()
 }
 
-class AppViewModel(application: Application) : AndroidViewModel(application) {
+class AppViewModel(application: Application, private val savedStateHandle: SavedStateHandle) : AndroidViewModel(application) {
     private val store = LocalStore(application)
-    private val client = AiClient()
+    private val client = AiClient(::updateProfileCredential)
     private val workspace = WorkspaceRepository(application)
     private val pythonRuntime = PythonRuntime(application, workspace)
     private val termuxBridge = TermuxBridge(application)
@@ -74,15 +78,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ?: store.loadActiveProjectId()?.takeIf { id -> initialSettings.projects.any { it.id == id } }
         ?: initialSettings.projects.firstOrNull()?.id
     private val runningJobs = mutableMapOf<String, Job>()
+    private val interruptedConversationIds = savedStateHandle.get<ArrayList<String>>(RUNNING_IDS_KEY).orEmpty()
     private val _state = MutableStateFlow(
         AppUiState(
             conversations = initialConversations,
             activeId = restoredConversationId,
             activeProjectId = restoredProjectId,
             settings = initialSettings,
-            drafts = store.loadDrafts()
+            drafts = store.loadDrafts(),
+            error = if (interruptedConversationIds.isNotEmpty()) "Предыдущая генерация была остановлена Android. Сообщение сохранено — можно отправить его снова." else null
         )
     )
+    init { savedStateHandle[RUNNING_IDS_KEY] = arrayListOf<String>() }
     val state = _state.asStateFlow()
 
     fun selectConversation(id: String) = _state.update { current ->
@@ -170,7 +177,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         var settingsToSave: AppSettings? = null
         var conversationsToSave: List<Conversation>? = null
         _state.update { current ->
-            if (current.settings.profiles.none { it.id == id } || current.isSending) return@update current
+            if (current.settings.profiles.none { it.id == id }) return@update current
+            if (current.isSending || current.activeConversation?.messages?.isNotEmpty() == true) {
+                return@update current.copy(error = "Модель уже привязана к этому чату. Создайте новый чат, чтобы выбрать другую")
+            }
             val settings = current.settings.copy(activeProfileId = id)
             val conversations = current.conversations.map { conversation ->
                 if (conversation.id == current.activeId) conversation.copy(modelProfileId = id) else conversation
@@ -206,6 +216,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             store.saveSettings(normalized)
             conversationsToSave?.let(store::saveConversations)
         }
+    }
+
+    private fun updateProfileCredential(profileId: String, credential: String) {
+        var settingsToSave: AppSettings? = null
+        _state.update { current ->
+            if (current.settings.profiles.none { it.id == profileId }) return@update current
+            val updated = current.settings.copy(profiles = current.settings.profiles.map { profile ->
+                if (profile.id == profileId) profile.copy(apiKey = credential) else profile
+            })
+            settingsToSave = updated
+            current.copy(settings = updated)
+        }
+        viewModelScope.launch(persistenceDispatcher) { settingsToSave?.let(store::saveSettings) }
     }
 
     fun setWorkspaceUri(uri: String) = saveSettings(_state.value.settings.copy(workspaceUri = uri))
@@ -249,6 +272,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val id = conversationId ?: return
         runningJobs.remove(id)?.cancel()
         _state.update { it.copy(runningConversations = it.runningConversations - id) }
+        saveRunningIds()
         if (runningJobs.isEmpty()) AgentForegroundService.stop(getApplication())
     }
 
@@ -261,26 +285,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (projectId == null) { _state.update { it.copy(error = "Сначала создайте или подключите проект") }; return false }
         val sourceDraftKey = snapshot.draftKey
         val existing = snapshot.activeConversation
+        val profile = runCatching {
+            existing?.modelBinding?.resolveCredential(snapshot.settings.profiles)
+                ?: existing?.let { conversation -> snapshot.settings.profiles.firstOrNull { it.id == conversation.modelProfileId } }
+                ?: snapshot.settings.activeProfile
+        }.getOrElse { throwable ->
+            _state.update { it.copy(error = throwable.message ?: "Не удалось определить модель этого чата") }
+            return false
+        }
+        val binding = existing?.modelBinding ?: profile.toConversationBinding()
         val userMessage = ChatMessage(role = MessageRole.USER, text = prompt, context = context)
         val conversation = if (existing == null) {
             Conversation(
                 title = prompt.replace('\n', ' ').take(42),
-                modelProfileId = snapshot.settings.activeProfileId,
+                modelProfileId = binding.credentialProfileId,
+                modelBinding = binding,
                 projectId = projectId,
                 messages = listOf(userMessage)
             )
         } else {
-            existing.copy(messages = existing.messages + userMessage, updatedAt = System.currentTimeMillis())
+            existing.copy(modelProfileId = binding.credentialProfileId, modelBinding = binding, messages = existing.messages + userMessage, updatedAt = System.currentTimeMillis())
         }
         val updated = listOf(conversation) + snapshot.conversations.filterNot { it.id == conversation.id }
         _state.update { it.copy(conversations = updated, activeId = conversation.id, activeProjectId = conversation.projectId, runningConversations = it.runningConversations + (conversation.id to AgentProgress()), drafts = it.drafts - sourceDraftKey, error = null) }
+        saveRunningIds()
         store.saveActiveSelection(conversation.id, conversation.projectId)
         viewModelScope.launch(persistenceDispatcher) { store.saveDraft(sourceDraftKey, ""); store.saveConversations(updated) }
 
         val job = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
-            val currentSettings = _state.value.settings
-            val profile = currentSettings.profiles.firstOrNull { it.id == conversation.modelProfileId }
-                ?: currentSettings.activeProfile
+            val currentSettings = snapshot.settings
             runCatching {
                 withContext(Dispatchers.IO) {
                     val project = currentSettings.projects.firstOrNull { it.id == conversation.projectId }
@@ -311,6 +344,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val contextMessages = com.xanichka.xacode.data.ContextWindow.prepare(messages, profile.maxContextTokens)
                     client.complete(currentSettings, profile, contextMessages, tools) { progress ->
                         _state.update { it.copy(runningConversations = it.runningConversations + (conversation.id to progress)) }
+                        saveRunningIds()
                     }
                 }
             }.onSuccess { answer ->
@@ -320,6 +354,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { throwable ->
                     if (throwable !is CancellationException) AgentForegroundService.notifyFinished(getApplication(), conversation.title, false)
                     _state.update { current -> current.copy(runningConversations = current.runningConversations - conversation.id, error = if (throwable is CancellationException) current.error else throwable.message ?: "Не удалось получить ответ") }
+                    saveRunningIds()
                 }
             runningJobs.remove(conversation.id)
             if (runningJobs.isEmpty()) AgentForegroundService.stop(getApplication())
@@ -352,6 +387,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             conversationsToSave = updated
             current.copy(conversations = updated, runningConversations = current.runningConversations - conversationId)
         }
+        saveRunningIds()
         viewModelScope.launch(persistenceDispatcher) { conversationsToSave?.let(store::saveConversations) }
     }
+
+    private fun saveRunningIds() {
+        savedStateHandle[RUNNING_IDS_KEY] = ArrayList(_state.value.runningConversations.keys)
+    }
+
+    private companion object { const val RUNNING_IDS_KEY = "running_conversation_ids" }
 }

@@ -1,19 +1,23 @@
 package com.xanichka.xacode.data
 
 import android.Manifest
-import android.app.IntentService
+import android.app.Service
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.IBinder
 import android.provider.DocumentsContract
 import androidx.core.content.ContextCompat
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class TermuxCommandResult(val stdout: String, val stderr: String, val exitCode: Int) {
     fun display(): String = buildString {
@@ -45,7 +49,7 @@ class TermuxBridge(private val context: Context) {
         if (relative.isBlank()) root else "$root/$relative"
     }.getOrNull()
 
-    fun run(projectUri: String, command: String, timeoutSeconds: Long = 90): TermuxCommandResult {
+    suspend fun run(projectUri: String, command: String, timeoutSeconds: Long = 90): TermuxCommandResult {
         require(isInstalled()) { "Termux не установлен" }
         require(hasPermission()) { "Дайте XaCode разрешение «Run commands in Termux» в настройках Android" }
         require(command.length in 1..32_000 && '\u0000' !in command) { "Недопустимая команда" }
@@ -70,25 +74,37 @@ class TermuxBridge(private val context: Context) {
         }
         try {
             context.startService(intent)
-            return future.get(timeoutSeconds, TimeUnit.SECONDS)
+            return withTimeout(timeoutSeconds * 1_000L) {
+                suspendCancellableCoroutine { continuation ->
+                    future.whenComplete { result, throwable ->
+                        if (!continuation.isActive) return@whenComplete
+                        if (throwable != null) continuation.resumeWithException(throwable)
+                        else continuation.resume(result)
+                    }
+                    continuation.invokeOnCancellation {
+                        pending.remove(executionId, future)
+                        resultIntent.cancel()
+                    }
+                }
+            }
         } finally {
-            pending.remove(executionId)
+            pending.remove(executionId, future)
         }
     }
 
-    fun inspectRuntime(projectUri: String): TermuxCommandResult = run(
+    suspend fun inspectRuntime(projectUri: String): TermuxCommandResult = run(
         projectUri,
         "for tool in bash python node npm git curl tar clang java; do printf '%s: ' \"\$tool\"; if command -v \"\$tool\" >/dev/null 2>&1; then (\"\$tool\" --version 2>&1 | head -n 1) || true; else echo missing; fi; done; pkg --version 2>&1 | head -n 1",
         120
     )
 
-    fun repairNodeRuntime(projectUri: String): TermuxCommandResult = run(
+    suspend fun repairNodeRuntime(projectUri: String): TermuxCommandResult = run(
         projectUri,
         "pkg update -y && pkg upgrade -y && pkg reinstall -y openssl nodejs && hash -r && node --version && npm --version",
         600
     )
 
-    fun installPackages(projectUri: String, packages: List<String>): TermuxCommandResult {
+    suspend fun installPackages(projectUri: String, packages: List<String>): TermuxCommandResult {
         require(packages.isNotEmpty() && packages.size <= 8) { "Укажите от 1 до 8 пакетов" }
         require(packages.all { it in SAFE_PACKAGES }) { "Разрешены пакеты: ${SAFE_PACKAGES.joinToString()}" }
         return run(projectUri, "pkg install -y ${packages.joinToString(" ")}", 600)
@@ -128,16 +144,23 @@ class TermuxBridge(private val context: Context) {
     }
 }
 
-@Suppress("DEPRECATION")
-class TermuxResultService : IntentService("XaCodeTermuxResult") {
-    override fun onHandleIntent(intent: Intent?) {
-        if (intent == null) return
+class TermuxResultService : Service() {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         val id = intent.getIntExtra(TermuxBridge.EXECUTION_ID, -1)
         val bundle = intent.getBundleExtra(TermuxBridge.EXTRA_RESULT_BUNDLE)
-        val future = TermuxBridge.pending.remove(id) ?: return
+        val future = TermuxBridge.pending.remove(id)
+        if (future == null) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         if (bundle == null) {
             future.completeExceptionally(IllegalStateException("Termux не вернул результат"))
-            return
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
         val error = bundle.getString(TermuxBridge.EXTRA_ERROR).orEmpty()
         if (error.isNotBlank()) future.completeExceptionally(IllegalStateException(error))
@@ -146,5 +169,9 @@ class TermuxResultService : IntentService("XaCodeTermuxResult") {
             stderr = bundle.getString(TermuxBridge.EXTRA_STDERR).orEmpty(),
             exitCode = bundle.getInt(TermuxBridge.EXTRA_EXIT_CODE, -1)
         ))
+        stopSelf(startId)
+        return START_NOT_STICKY
     }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }

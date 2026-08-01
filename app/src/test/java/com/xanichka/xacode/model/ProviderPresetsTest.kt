@@ -21,4 +21,13 @@ class ProviderPresetsTest {
         assertEquals("deepseek-v4-flash", currentModelId(ProviderType.DEEPSEEK, "deepseek-reasoner"))
         assertEquals(1_000_000, currentContextTokens(ProviderType.DEEPSEEK, "deepseek-v4-flash", 128_000))
     }
+
+    @Test
+    fun chatGptOAuthIsASeparateProviderWithCodexModels() {
+        val preset = presetFor(ProviderType.CHATGPT)
+        assertTrue(preset.oauth)
+        assertTrue(preset.apiKeyOptional)
+        assertEquals("gpt-5.6-sol", preset.defaultModel)
+        assertEquals(listOf("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"), preset.models)
+    }
 }

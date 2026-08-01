@@ -234,8 +234,9 @@ fun ChatScreen(
                         IconButton(onClick = { showTools = true }) {
                             Icon(PhIcons.Plus, "Добавить файл", Modifier.size(22.dp))
                         }
+                        val modelLocked = state.activeConversation?.messages?.isNotEmpty() == true
                         Surface(
-                            modifier = Modifier.clickable { showModels = true },
+                            modifier = Modifier.clickable(enabled = !modelLocked) { showModels = true },
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
@@ -243,6 +244,7 @@ fun ChatScreen(
                                 ProviderBadge(state.currentProfile.provider, 20.dp, selected = true)
                                 Spacer(Modifier.width(6.dp))
                                 Text(state.currentProfile.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                if (modelLocked) Text(" · привязана", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                             }
                         }
                         Spacer(Modifier.weight(1f))

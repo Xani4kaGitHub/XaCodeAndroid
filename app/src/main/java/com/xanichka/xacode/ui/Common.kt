@@ -43,6 +43,7 @@ fun ProviderBadge(provider: ProviderType, size: Dp = 42.dp, selected: Boolean = 
     val (icon, color) = when (provider) {
         ProviderType.DEEPSEEK -> PhIcons.DeepSeek to Color(0xFF4D8DFF)
         ProviderType.OPENAI -> PhIcons.OpenAi to Color(0xFF10A37F)
+        ProviderType.CHATGPT -> PhIcons.OpenAi to Color(0xFF10A37F)
         ProviderType.ANTHROPIC -> PhIcons.Anthropic to Color(0xFFD97757)
         ProviderType.GOOGLE -> PhIcons.Gemini to Color(0xFF4285F4)
         ProviderType.OPENROUTER -> PhIcons.OpenRouter to Color(0xFF7C6CFF)

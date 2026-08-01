@@ -12,16 +12,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 
 data class AiResult(val text: String, val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val toolTrace: List<ToolTrace> = emptyList())
 data class AgentProgress(val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val currentTool: String = "", val toolTrace: List<ToolTrace> = emptyList())
 internal data class DsmlToolCall(val name: String, val arguments: String)
 
-class AiClient {
+class AiClient(private val onCredentialRefreshed: (profileId: String, credential: String) -> Unit = { _, _ -> }) {
     suspend fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null, onProgress: (AgentProgress) -> Unit = {}): AiResult {
         NetworkSecurity.apiUrl(profile.baseUrl)
-        require(profile.model.isNotBlank() || profile.model == "-") { "Укажите модель в настройках" }
+        require(profile.model.isNotBlank()) { "Укажите модель в настройках" }
         require(presetFor(profile.provider).apiKeyOptional || profile.apiKey.isNotBlank()) {
             "API-ключ не найден. Откройте настройки модели, добавьте ключ и нажмите «Проверить»."
         }
@@ -45,10 +46,93 @@ class AiClient {
                 append(settings.customInstructions)
             }
         }
-        return if (usesAnthropicFormat(profile)) {
+        return if (profile.provider == ProviderType.CHATGPT) {
+            completeChatGpt(settings, profile, systemPrompt, messages, tools, onProgress)
+        } else if (usesAnthropicFormat(profile)) {
             completeAnthropic(settings, profile, systemPrompt, messages, tools, onProgress)
         } else {
             completeOpenAi(settings, profile, systemPrompt, messages, tools, onProgress)
+        }
+    }
+
+    private suspend fun completeChatGpt(
+        settings: AppSettings,
+        profile: ModelProfile,
+        systemPrompt: String,
+        messages: List<ChatMessage>,
+        tools: AgentToolExecutor?,
+        onProgress: (AgentProgress) -> Unit
+    ): AiResult {
+        val startedAt = System.currentTimeMillis()
+        var totalInputTokens = 0
+        var totalOutputTokens = 0
+        var totalToolCalls = 0
+        val toolTrace = mutableListOf<ToolTrace>()
+        var previousToolSignature = ""
+        val oauthClient = ChatGptOAuthClient()
+        val savedAuth = ChatGptAuth.decode(profile.apiKey)
+        val auth = oauthClient.refreshIfNeeded(savedAuth)
+        if (auth != savedAuth) onCredentialRefreshed(profile.id, auth.encode())
+        val input = JSONArray()
+        messages.forEach { message ->
+            input.put(JSONObject()
+                .put("role", if (message.role == MessageRole.USER) "user" else "assistant")
+                .put("content", message.text + message.context.takeIf { it.isNotBlank() }?.let { "\n\nКонтекст из файлов:\n$it" }.orEmpty()))
+        }
+        val responseTools = tools?.definitions?.let(::responsesTools)
+        val headers = mapOf(
+            "Content-Type" to "application/json",
+            "Accept" to "text/event-stream",
+            "Authorization" to "Bearer ${auth.accessToken}",
+            "ChatGPT-Account-Id" to auth.accountId,
+            "Originator" to "codex_cli_rs",
+            "Version" to "0.144.6",
+            "Session_id" to java.util.UUID.randomUUID().toString(),
+            "User-Agent" to "codex_cli_rs/0.144.6 (Android; XaCode)"
+        )
+        var round = 0
+        while (true) {
+            if (settings.agentLimitsEnabled && round >= settings.agentMaxRounds) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
+            round++
+            currentCoroutineContext().ensureActive()
+            budgetStop(settings, startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
+            val payload = JSONObject()
+                .put("model", profile.model)
+                .put("instructions", systemPrompt)
+                .put("input", input)
+                .put("store", false)
+                .put("stream", true)
+                .put("reasoning", JSONObject().put("effort", profile.reasoningEffort).put("summary", "auto"))
+            if (responseTools != null) {
+                payload.put("tools", responseTools)
+                payload.put("tool_choice", "auto")
+                payload.put("parallel_tool_calls", true)
+            }
+            if (profile.serviceTier == "fast") payload.put("service_tier", "priority")
+            // Never send ChatGPT OAuth credentials to a user-editable/custom host.
+            val response = requestChatGptSse("https://chatgpt.com/backend-api/codex/responses", headers, payload)
+            totalInputTokens += response.inputTokens
+            totalOutputTokens += response.outputTokens
+            budgetStop(settings, startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
+            if (tools == null || response.calls.isEmpty()) {
+                return AiResult(response.text.trim(), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolTrace.toList())
+            }
+            if (settings.agentLimitsEnabled && totalToolCalls + response.calls.size > settings.agentMaxToolCalls) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
+            if (response.text.isNotBlank()) input.put(JSONObject().put("role", "assistant").put("content", response.text))
+            totalToolCalls += response.calls.size
+            response.calls.forEach { call ->
+                input.put(JSONObject().put("type", "function_call").put("call_id", call.callId).put("name", call.name).put("arguments", call.arguments))
+                val signature = "${call.name}:${call.arguments}"
+                val traceIndex = toolTrace.size
+                toolTrace += ToolTrace(name = call.name, arguments = traceValue(call.arguments))
+                onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, call.name, toolTrace.toList()))
+                val toolStartedAt = System.currentTimeMillis()
+                val result = if (signature == previousToolSignature) "ERROR [${call.name}]: identical consecutive call skipped" else tools.execute(call.name, call.arguments)
+                toolTrace[traceIndex] = toolTrace[traceIndex].copy(result = traceValue(result), state = if (result.startsWith("ERROR")) ToolTraceState.ERROR else ToolTraceState.SUCCESS, elapsedMs = System.currentTimeMillis() - toolStartedAt)
+                onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, call.name, toolTrace.toList()))
+                previousToolSignature = signature
+                input.put(JSONObject().put("type", "function_call_output").put("call_id", call.callId).put("output", result))
+            }
         }
     }
 
@@ -85,7 +169,7 @@ class AiClient {
             // DeepSeek V4 thinking mode supports tools but rejects tool_choice.
             if (profile.provider != ProviderType.DEEPSEEK) payload.put("tool_choice", "auto")
         }
-        if (profile.model != "-") payload.put("model", profile.model)
+        payload.put("model", profile.model)
         if (settings.temperatureEnabled) payload.put("temperature", settings.temperature.toDouble())
         if (profile.provider == ProviderType.DEEPSEEK) {
             val thinkingEnabled = profile.reasoningEffort != "disabled"
@@ -191,7 +275,7 @@ class AiClient {
             .put("messages", bodyMessages)
             .put("max_tokens", (profile.maxContextTokens / 4).coerceIn(1_024, 4_096))
         if (tools != null) payload.put("tools", tools.anthropicDefinitions)
-        if (profile.model != "-") payload.put("model", profile.model)
+        payload.put("model", profile.model)
         if (settings.temperatureEnabled) payload.put("temperature", settings.temperature.toDouble())
         val headers = buildMap {
                 put("Content-Type", "application/json")
@@ -240,10 +324,10 @@ class AiClient {
         }
     }
 
-    private suspend fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
+    private suspend fun request(url: String, headers: Map<String, String>, payload: JSONObject): String = retryTransient {
         currentCoroutineContext().ensureActive()
         val connection = NetworkSecurity.apiUrl(url).openConnection() as HttpURLConnection
-        return try {
+        try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 30_000
             connection.readTimeout = 90_000
@@ -253,11 +337,112 @@ class AiClient {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val response = NetworkSecurity.readLimited(stream, 8 * 1024 * 1024)
-            if (code !in 200..299) error(extractError(response).ifBlank { "API вернул ошибку $code" })
+            if (code !in 200..299) {
+                val message = extractError(response).ifBlank { "API вернул ошибку $code" }
+                if (code in RETRYABLE_STATUS_CODES) throw RetryableHttpException(message, retryAfterMs(connection))
+                error(message)
+            }
             currentCoroutineContext().ensureActive()
             response
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private suspend fun requestChatGptSse(url: String, headers: Map<String, String>, payload: JSONObject): ChatGptResponse = retryTransient {
+        currentCoroutineContext().ensureActive()
+        val connection = NetworkSecurity.apiUrl(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 120_000
+            connection.doOutput = true
+            headers.forEach(connection::setRequestProperty)
+            connection.outputStream.bufferedWriter().use { it.write(payload.toString()) }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val errorBody = NetworkSecurity.readLimited(connection.errorStream, 2 * 1024 * 1024)
+                val message = extractError(errorBody).ifBlank { "ChatGPT Codex вернул ошибку $code" }
+                if (code in RETRYABLE_STATUS_CODES) throw RetryableHttpException(message, retryAfterMs(connection))
+                error(message)
+            }
+            val text = StringBuilder()
+            val calls = linkedMapOf<String, ChatGptToolCall>()
+            var inputTokens = 0
+            var outputTokens = 0
+            val coroutineContext = currentCoroutineContext()
+            connection.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    coroutineContext.ensureActive()
+                    if (!line.startsWith("data:")) return@forEach
+                    val data = line.removePrefix("data:").trim()
+                    if (data.isBlank() || data == "[DONE]") return@forEach
+                    val event = runCatching { JSONObject(data) }.getOrNull() ?: return@forEach
+                    when (event.optString("type")) {
+                        "response.output_text.delta" -> text.append(event.optString("delta"))
+                        "response.output_item.done" -> event.optJSONObject("item")?.let { item ->
+                            if (item.optString("type") == "function_call") {
+                                val callId = item.optString("call_id", item.optString("id"))
+                                if (callId.isNotBlank()) calls[callId] = ChatGptToolCall(callId, item.optString("name"), item.optString("arguments", "{}"))
+                            }
+                        }
+                        "response.completed" -> event.optJSONObject("response")?.let { completed ->
+                            completed.optJSONObject("usage")?.let { usage ->
+                                inputTokens = usage.optInt("input_tokens", inputTokens)
+                                outputTokens = usage.optInt("output_tokens", outputTokens)
+                            }
+                            val output = completed.optJSONArray("output") ?: JSONArray()
+                            for (index in 0 until output.length()) {
+                                val item = output.optJSONObject(index) ?: continue
+                                if (item.optString("type") == "function_call") {
+                                    val callId = item.optString("call_id", item.optString("id"))
+                                    if (callId.isNotBlank()) calls[callId] = ChatGptToolCall(callId, item.optString("name"), item.optString("arguments", "{}"))
+                                }
+                            }
+                        }
+                        "error", "response.failed" -> {
+                            val failure = event.optJSONObject("error")
+                                ?: event.optJSONObject("response")?.optJSONObject("error")
+                            error(failure?.optString("message").orEmpty().ifBlank { "Ошибка ChatGPT Codex" })
+                        }
+                    }
+                }
+            }
+            ChatGptResponse(text.toString(), calls.values.toList(), inputTokens, outputTokens)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private suspend fun <T> retryTransient(block: suspend () -> T): T {
+        var failure: RetryableHttpException? = null
+        repeat(MAX_HTTP_ATTEMPTS) { attempt ->
+            try {
+                return block()
+            } catch (error: RetryableHttpException) {
+                failure = error
+                if (attempt == MAX_HTTP_ATTEMPTS - 1) throw error
+                currentCoroutineContext().ensureActive()
+                delay(error.retryAfterMs ?: (500L shl attempt).coerceAtMost(4_000L))
+            }
+        }
+        throw failure ?: IllegalStateException("API request failed")
+    }
+
+    private fun retryAfterMs(connection: HttpURLConnection): Long? {
+        val value = connection.getHeaderField("Retry-After")?.trim()?.toLongOrNull() ?: return null
+        return (value * 1_000L).coerceIn(0L, 30_000L)
+    }
+
+    private fun responsesTools(definitions: JSONArray): JSONArray = JSONArray().apply {
+        for (index in 0 until definitions.length()) {
+            val function = definitions.getJSONObject(index).getJSONObject("function")
+            put(JSONObject()
+                .put("type", "function")
+                .put("name", function.getString("name"))
+                .put("description", function.optString("description"))
+                .put("parameters", function.optJSONObject("parameters") ?: JSONObject().put("type", "object"))
+                .put("strict", false))
         }
     }
 
@@ -292,6 +477,11 @@ class AiClient {
         else -> null
     }
 
+    private companion object {
+        const val MAX_HTTP_ATTEMPTS = 3
+        val RETRYABLE_STATUS_CODES = setOf(429, 502, 503, 504)
+    }
+
     private fun budgetResult(startedAt: Long, input: Int, output: Int, calls: Int, trace: List<ToolTrace>, reason: String) = AiResult(
         text = "XaCode безопасно остановил агента: $reason. Уже выполненные действия сохранены в журнале инструментов.",
         inputTokens = input,
@@ -302,6 +492,10 @@ class AiClient {
     )
 
 }
+
+private data class ChatGptToolCall(val callId: String, val name: String, val arguments: String)
+private data class ChatGptResponse(val text: String, val calls: List<ChatGptToolCall>, val inputTokens: Int, val outputTokens: Int)
+private class RetryableHttpException(message: String, val retryAfterMs: Long?) : IllegalStateException(message)
 
 private fun traceValue(value: String): String {
     val redacted = value.replace(

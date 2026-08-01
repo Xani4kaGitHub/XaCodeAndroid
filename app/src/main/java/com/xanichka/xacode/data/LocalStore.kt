@@ -4,6 +4,7 @@ import android.content.Context
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.Conversation
+import com.xanichka.xacode.model.ConversationModelBinding
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
@@ -42,7 +43,8 @@ class LocalStore(context: Context) {
                     model = currentModelId(provider, savedModel),
                     maxContextTokens = currentContextTokens(provider, savedModel, savedContext),
                     showReasoning = item.optBoolean("showReasoning", false),
-                    reasoningEffort = item.optString("reasoningEffort", "high")
+                    reasoningEffort = item.optString("reasoningEffort", "high"),
+                    serviceTier = item.optString("serviceTier", "standard")
                 )
             }
         }.getOrDefault(emptyList()).ifEmpty {
@@ -125,6 +127,7 @@ class LocalStore(context: Context) {
                 put("maxContextTokens", profile.maxContextTokens)
                 put("showReasoning", profile.showReasoning)
                 put("reasoningEffort", profile.reasoningEffort)
+                put("serviceTier", profile.serviceTier)
             })
         }
         val projectsJson = JSONArray()
@@ -197,7 +200,8 @@ class LocalStore(context: Context) {
                 val message = messagesJson.getJSONObject(messageIndex)
                 ChatMessage(
                     id = message.getString("id"),
-                    role = MessageRole.valueOf(message.getString("role")),
+                    role = runCatching { MessageRole.valueOf(message.optString("role")) }
+                        .getOrDefault(MessageRole.USER),
                     text = message.getString("text"),
                     context = message.optString("context", ""),
                     inputTokens = message.optInt("inputTokens", 0),
@@ -220,10 +224,26 @@ class LocalStore(context: Context) {
                     createdAt = message.optLong("createdAt", 0L)
                 )
             }
+            val binding = item.optJSONObject("modelBinding")?.let { saved ->
+                runCatching {
+                    ConversationModelBinding(
+                        credentialProfileId = saved.getString("credentialProfileId"),
+                        profileName = saved.optString("profileName", "Модель"),
+                        provider = ProviderType.valueOf(saved.getString("provider")),
+                        baseUrl = saved.getString("baseUrl"),
+                        model = saved.getString("model"),
+                        maxContextTokens = saved.optInt("maxContextTokens", 32_000).coerceAtLeast(1_024),
+                        showReasoning = saved.optBoolean("showReasoning", false),
+                        reasoningEffort = saved.optString("reasoningEffort", "high"),
+                        serviceTier = saved.optString("serviceTier", "standard")
+                    )
+                }.getOrNull()
+            }
             Conversation(
                 id = item.getString("id"),
                 title = item.optString("title", "Новый чат"),
                 modelProfileId = item.optString("modelProfileId", defaultProfileId),
+                modelBinding = binding,
                 projectId = item.optString("projectId", "").takeIf { it.isNotBlank() },
                 messages = messages,
                 updatedAt = item.optLong("updatedAt", 0L)
@@ -262,6 +282,19 @@ class LocalStore(context: Context) {
                 put("id", conversation.id)
                 put("title", conversation.title)
                 put("modelProfileId", conversation.modelProfileId)
+                conversation.modelBinding?.let { binding ->
+                    put("modelBinding", JSONObject().apply {
+                        put("credentialProfileId", binding.credentialProfileId)
+                        put("profileName", binding.profileName)
+                        put("provider", binding.provider.name)
+                        put("baseUrl", binding.baseUrl)
+                        put("model", binding.model)
+                        put("maxContextTokens", binding.maxContextTokens)
+                        put("showReasoning", binding.showReasoning)
+                        put("reasoningEffort", binding.reasoningEffort)
+                        put("serviceTier", binding.serviceTier)
+                    })
+                }
                 put("projectId", conversation.projectId ?: "")
                 put("updatedAt", conversation.updatedAt)
                 put("messages", messages)

@@ -62,7 +62,7 @@ class AgentToolExecutor(
             definitions.getJSONObject(index).getJSONObject("function").getString("name")
         }
 
-    fun execute(name: String, arguments: String): String = runCatching {
+    suspend fun execute(name: String, arguments: String): String = runCatching {
         val args = JSONObject(arguments.ifBlank { "{}" })
         when (name) {
             "list_directory" -> repository.listRelative(projectUri, args.optString("path")).joinToString("\n") { (if (it.isDirectory) "[DIR] " else "[FILE] ") + it.name }
