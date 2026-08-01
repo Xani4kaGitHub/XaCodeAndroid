@@ -401,7 +401,9 @@ private fun MessageItem(message: ChatMessage, language: com.xanichka.xacode.mode
             modifier = Modifier.fillMaxWidth(if (isUser) .86f else 1f)
         ) {
             Column(Modifier.padding(if (isUser) 13.dp else 4.dp)) {
-                if (isUser) Text(message.text, fontSize = 15.sp, lineHeight = 22.sp) else MarkdownText(message.text)
+                SelectionContainer {
+                    if (isUser) Text(message.text, fontSize = 15.sp, lineHeight = 22.sp) else MarkdownText(message.text)
+                }
                 if (message.context.isNotBlank()) Text(tr(language, "Файлы прикреплены", "Файли прикріплено", "Files attached"), Modifier.padding(top = 6.dp), color = XaBlue, fontSize = 11.sp)
                 if (!isUser) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) { Icon(PhIcons.Copy, null, Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(tr(language, "Копировать", "Копіювати", "Copy"), fontSize = 11.sp) }
@@ -580,7 +582,7 @@ private fun CodeBlock(language: String, code: String) {
                 TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)) { Icon(PhIcons.Copy, "Копировать код", Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text("Копировать", fontSize = 10.sp) }
             }
             androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .45f))
-            SelectionContainer { Text(code, Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(13.dp), fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp) }
+            Text(code, Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(13.dp), fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp)
         }
     }
 }

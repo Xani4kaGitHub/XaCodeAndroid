@@ -37,12 +37,17 @@ class AgentToolExecutor(
         if (networkDownloadsEnabled) put(tool("http_download", "Download a file from a public HTTPS URL into the current project", JSONObject().put("url", string("Public HTTPS source URL")).put("path", string("Relative destination path with extension")), listOf("url", "path")))
         if (pythonExecutionEnabled) put(tool("run_python", "Run a Python .py file from the current Android project and return stdout and stderr", JSONObject().put("path", string("Relative .py entry file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
         if (termuxExecutionEnabled) {
-            put(tool("run_command", "Run a shell command with Termux in the current Android project. pkg and apt are allowed; use the structured runtime tools when possible.", JSONObject().put("command", string("Shell command to run inside the project directory")).put("timeoutSeconds", integer("Timeout from 1 to 180 seconds")), listOf("command")))
+            put(tool("run_command", "Run a shell command with Termux in the current Android project. pkg and apt are allowed; use the structured runtime tools when possible.", JSONObject().put("command", string("Shell command to run inside the project directory")).put("timeoutSeconds", integer("Timeout from 1 to 600 seconds")), listOf("command")))
             put(tool("inspect_runtime", "Check real installed versions of Python, Node.js, npm, git, curl, tar, clang and Java in Termux", JSONObject()))
             put(tool("repair_node_runtime", "Repair a broken Termux Node.js/OpenSSL installation, then verify node and npm. Use when node reports CANNOT LINK EXECUTABLE or a missing OpenSSL symbol.", JSONObject()))
             put(tool("install_termux_packages", "Install approved development packages in Termux", JSONObject().put("packages", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string").put("enum", JSONArray(TermuxBridge.SAFE_PACKAGES.toList()))).put("maxItems", 8)), listOf("packages")))
             put(tool("git_status", "Show Git status and current branch for the Android project", JSONObject()))
             put(tool("git_diff", "Show the current unstaged and staged Git diff", JSONObject()))
+            put(tool("git_init", "Initialize Git in the current project folder", JSONObject()))
+            put(tool("git_log", "Show recent Git commits", JSONObject().put("count", integer("Number of commits from 1 to 30"))))
+            put(tool("run_node", "Run a JavaScript entry file with Node.js", JSONObject().put("path", string("Relative .js/.mjs/.cjs file")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("path")))
+            put(tool("run_npm_script", "Run one script from package.json", JSONObject().put("script", string("npm script name")).put("arguments", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))), listOf("script")))
+            put(tool("npm_install", "Install npm dependencies in the current project", JSONObject().put("packages", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string")).put("maxItems", 24)).put("dev", JSONObject().put("type", "boolean"))))
             put(tool("run_project_checks", "Detect the project type and run its standard tests/build checks through Termux", JSONObject()))
         }
     }
@@ -91,7 +96,7 @@ class AgentToolExecutor(
             "run_python" -> { require(pythonExecutionEnabled) { "Python execution is disabled in settings" }; pythonRuntime.run(projectUri, args.getString("path"), args.optJSONArray("arguments") ?: JSONArray()) }
             "run_command" -> {
                 require(termuxExecutionEnabled) { "Termux execution is disabled in settings" }
-                termuxBridge.run(projectUri, args.getString("command"), args.optLong("timeoutSeconds", 90).coerceIn(1, 180)).display()
+                termuxBridge.run(projectUri, args.getString("command"), args.optLong("timeoutSeconds", 90).coerceIn(1, 600)).display()
             }
             "inspect_runtime" -> { require(termuxExecutionEnabled); termuxBridge.inspectRuntime(projectUri).display() }
             "repair_node_runtime" -> { require(termuxExecutionEnabled); termuxBridge.repairNodeRuntime(projectUri).display() }
@@ -100,15 +105,37 @@ class AgentToolExecutor(
                 val packages = args.getJSONArray("packages").let { array -> (0 until array.length()).map(array::getString) }
                 termuxBridge.installPackages(projectUri, packages).display()
             }
-            "git_status" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "git status --short --branch", 60).display() }
-            "git_diff" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "git diff --no-ext-diff; git diff --cached --no-ext-diff", 90).display() }
+            "git_status" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git status --short --branch; else echo 'NOT_A_GIT_REPOSITORY: use git_init if version control is needed'; fi", 60).display() }
+            "git_diff" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git diff --no-ext-diff; git diff --cached --no-ext-diff; else echo 'NOT_A_GIT_REPOSITORY: use git_init first'; fi", 90).display() }
+            "git_init" -> { require(termuxExecutionEnabled); termuxBridge.run(projectUri, "git init && git status --short --branch", 60).display() }
+            "git_log" -> { require(termuxExecutionEnabled); val count = args.optInt("count", 10).coerceIn(1, 30); termuxBridge.run(projectUri, "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git log --oneline -$count; else echo 'NOT_A_GIT_REPOSITORY'; fi", 60).display() }
+            "run_node" -> {
+                require(termuxExecutionEnabled)
+                val path = safeRelativeShellPath(args.getString("path"), setOf("js", "mjs", "cjs"))
+                val argumentsList = jsonStrings(args.optJSONArray("arguments")).joinToString(" ", transform = ::shellQuote)
+                termuxBridge.run(projectUri, "node ${shellQuote(path)}${argumentsList.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()}", 180).display()
+            }
+            "run_npm_script" -> {
+                require(termuxExecutionEnabled)
+                val script = args.getString("script"); require(script.matches(Regex("[A-Za-z0-9:_-]{1,80}"))) { "Invalid npm script name" }
+                val argumentsList = jsonStrings(args.optJSONArray("arguments")).joinToString(" ", transform = ::shellQuote)
+                termuxBridge.run(projectUri, "npm run ${shellQuote(script)}${argumentsList.takeIf { it.isNotBlank() }?.let { " -- $it" }.orEmpty()}", 600).display()
+            }
+            "npm_install" -> {
+                require(termuxExecutionEnabled)
+                val packages = jsonStrings(args.optJSONArray("packages")); require(packages.size <= 24) { "Too many npm packages" }
+                packages.forEach { require(it.matches(Regex("[A-Za-z0-9@._/+~-]{1,160}")) && ".." !in it) { "Invalid npm package: $it" } }
+                val suffix = packages.joinToString(" ", transform = ::shellQuote)
+                val command = buildString { append("npm install"); if (args.optBoolean("dev")) append(" --save-dev"); if (suffix.isNotBlank()) append(' ').append(suffix) }
+                termuxBridge.run(projectUri, command, 600).display()
+            }
             "run_project_checks" -> {
                 require(termuxExecutionEnabled)
-                termuxBridge.run(projectUri, "if [ -f package.json ]; then npm test --if-present && npm run build --if-present; elif [ -f gradlew ]; then sh gradlew test; elif [ -f pyproject.toml ]; then python -m pytest; elif [ -f Cargo.toml ]; then cargo test; elif [ -f go.mod ]; then go test ./...; else echo 'No supported project manifest found'; fi", 180).display()
+                termuxBridge.run(projectUri, "if [ -f package.json ]; then npm test --if-present && npm run build --if-present; elif [ -f gradlew ]; then sh gradlew test; elif [ -f pyproject.toml ] || [ -f pytest.ini ]; then python -m pytest; elif [ -f requirements.txt ]; then python -m compileall .; elif [ -f Cargo.toml ]; then cargo test; elif [ -f go.mod ]; then go test ./...; else echo 'NO_PROJECT_MANIFEST: create package.json, pyproject.toml, gradlew, Cargo.toml or go.mod before running project checks'; fi", 600).display()
             }
-            else -> "Unknown tool: $name"
+            else -> error("Unknown tool: $name")
         }
-    }.getOrElse { "Tool error: ${it.message}" }
+    }.fold(onSuccess = { "OK [$name]\n${limitToolOutput(it)}" }, onFailure = { "ERROR [$name]: ${it.message ?: it::class.java.simpleName}" })
 
     private fun string(description: String) = JSONObject().put("type", "string").put("description", description)
     private fun integer(description: String) = JSONObject().put("type", "integer").put("minimum", 1).put("description", description)
@@ -117,6 +144,21 @@ class AgentToolExecutor(
         JSONObject().put("type", "function").put("function", JSONObject().put("name", name).put("description", description).put("parameters", JSONObject().put("type", "object").put("properties", properties).put("required", JSONArray(required))))
 
     private fun backup(path: String) { runCatching { repository.readRelative(projectUri, path) }.getOrNull()?.let { backups[path] = it } }
+
+    private fun jsonStrings(array: JSONArray?): List<String> = if (array == null) emptyList() else (0 until array.length()).map(array::getString)
+
+    private fun safeRelativeShellPath(path: String, extensions: Set<String>): String {
+        val normalized = path.replace('\\', '/').trim('/')
+        require(normalized.isNotBlank() && !normalized.startsWith('/') && normalized.split('/').none { it == ".." }) { "Path must stay inside the project" }
+        require(normalized.substringAfterLast('.', "").lowercase() in extensions) { "Unsupported file extension" }
+        return normalized
+    }
+
+    private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
+
+    private fun limitToolOutput(value: String): String = if (value.length <= MAX_TOOL_OUTPUT_CHARS) value else {
+        value.take(MAX_TOOL_OUTPUT_CHARS) + "\n… OUTPUT TRUNCATED by XaCode (${value.length - MAX_TOOL_OUTPUT_CHARS} characters omitted)"
+    }
 
     private fun manageTodos(args: JSONObject): String = when (args.getString("action")) {
         "add" -> { val id = nextTodoId++; todos[id] = args.getString("textOrId"); "Added todo $id" }
@@ -177,4 +219,6 @@ class AgentToolExecutor(
         }
         error("Too many redirects")
     }
+
+    private companion object { const val MAX_TOOL_OUTPUT_CHARS = 24_000 }
 }

@@ -599,6 +599,10 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
             InfoRow(PhIcons.Cpu, "run_command · run_project_checks", "Node.js, npm, тесты и сборка через Termux")
             HorizontalDivider(Modifier.padding(start = 58.dp))
             InfoRow(PhIcons.FileCode, "git_status · git_diff · install packages", "Git и установка разрешённых пакетов Termux")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.FileCode, "git_init · git_log", "Инициализация репозитория и история коммитов")
+            HorizontalDivider(Modifier.padding(start = 58.dp))
+            InfoRow(PhIcons.Cpu, "run_node · npm_install · run_npm_script", "Запуск JavaScript и управление npm без ручной shell-команды")
         } }
         item { SettingsSection("СРЕДА ANDROID") {
             InfoRow(PhIcons.Check, "Файловый агент", "Работает через доступ Android к выбранной папке")
