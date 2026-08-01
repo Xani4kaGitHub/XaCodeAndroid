@@ -6,6 +6,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DsmlToolCallTest {
+    @Test
+    fun parsesAsciiDoublePipeDsmlAndRemovesItFromVisibleText() {
+        val sample = """Installing in background.
+            <||DSML||tool_calls>
+            <||DSML||invoke name="run_command">
+            <||DSML||parameter name="command" string="true">python --version</||DSML||parameter>
+            <||DSML||parameter name="timeoutSeconds" string="false">30</||DSML||parameter>
+            </||DSML||invoke>
+            </||DSML||tool_calls>""".trimIndent()
+
+        val calls = parseDsmlToolCalls(sample)
+
+        assertEquals(1, calls.size)
+        assertEquals("run_command", calls.single().name)
+        assertEquals("{\"command\":\"python --version\", \"timeoutSeconds\":30}", calls.single().arguments)
+        assertEquals("Installing in background.", sanitizeAssistantText(sample))
+    }
+
     private val sample = """
         <｜DSML｜tool_calls>
         <｜DSML｜invoke name="run_python">

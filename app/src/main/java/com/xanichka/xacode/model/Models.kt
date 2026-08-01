@@ -84,12 +84,14 @@ data class AppSettings(
     val projectsRootUri: String = "",
     val projects: List<ProjectWorkspace> = emptyList(),
     val permissionOnboardingDone: Boolean = false,
+    val backgroundOnboardingDone: Boolean = false,
     val agentFileToolsEnabled: Boolean = true,
     val destructiveToolsEnabled: Boolean = false,
     val networkDownloadsEnabled: Boolean = false,
     val pythonExecutionEnabled: Boolean = false,
     val termuxExecutionEnabled: Boolean = false,
     val autoVerifyChanges: Boolean = true,
+    val showToolActivity: Boolean = true,
     val animationsEnabled: Boolean = true,
     val language: UiLanguage = UiLanguage.RUSSIAN
 ) {
@@ -98,6 +100,18 @@ data class AppSettings(
 }
 
 enum class MessageRole { USER, ASSISTANT }
+
+enum class ToolTraceState { RUNNING, SUCCESS, ERROR }
+
+@Immutable
+data class ToolTrace(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val arguments: String = "",
+    val result: String = "",
+    val state: ToolTraceState = ToolTraceState.RUNNING,
+    val elapsedMs: Long = 0L
+)
 
 @Immutable
 data class ChatMessage(
@@ -109,6 +123,7 @@ data class ChatMessage(
     val outputTokens: Int = 0,
     val toolCalls: Int = 0,
     val elapsedMs: Long = 0,
+    val toolTrace: List<ToolTrace> = emptyList(),
     val createdAt: Long = System.currentTimeMillis()
 )
 

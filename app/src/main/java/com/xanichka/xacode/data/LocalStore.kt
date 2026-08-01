@@ -9,6 +9,8 @@ import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
 import com.xanichka.xacode.model.UiLanguage
+import com.xanichka.xacode.model.ToolTrace
+import com.xanichka.xacode.model.ToolTraceState
 import com.xanichka.xacode.model.currentContextTokens
 import com.xanichka.xacode.model.currentModelId
 import com.xanichka.xacode.model.presetFor
@@ -90,12 +92,14 @@ class LocalStore(context: Context) {
             },
             projects = projects,
             permissionOnboardingDone = preferences.getBoolean("permissionOnboardingDone", false),
+            backgroundOnboardingDone = preferences.getBoolean("backgroundOnboardingDone", false),
             agentFileToolsEnabled = preferences.getBoolean("agentFileToolsEnabled", true),
             destructiveToolsEnabled = preferences.getBoolean("destructiveToolsEnabled", false),
             networkDownloadsEnabled = preferences.getBoolean("networkDownloadsEnabled", false),
             pythonExecutionEnabled = preferences.getBoolean("pythonExecutionEnabled", false),
             termuxExecutionEnabled = preferences.getBoolean("termuxExecutionEnabled", false),
             autoVerifyChanges = preferences.getBoolean("autoVerifyChanges", true),
+            showToolActivity = preferences.getBoolean("showToolActivity", true),
             animationsEnabled = preferences.getBoolean("animationsEnabled", true),
             language = runCatching {
                 UiLanguage.valueOf(preferences.getString("language", UiLanguage.RUSSIAN.name).orEmpty())
@@ -139,12 +143,14 @@ class LocalStore(context: Context) {
             .putString("projectsRootUri", value.projectsRootUri)
             .putString("projects", projectsJson.toString())
             .putBoolean("permissionOnboardingDone", value.permissionOnboardingDone)
+            .putBoolean("backgroundOnboardingDone", value.backgroundOnboardingDone)
             .putBoolean("agentFileToolsEnabled", value.agentFileToolsEnabled)
             .putBoolean("destructiveToolsEnabled", value.destructiveToolsEnabled)
             .putBoolean("networkDownloadsEnabled", value.networkDownloadsEnabled)
             .putBoolean("pythonExecutionEnabled", value.pythonExecutionEnabled)
             .putBoolean("termuxExecutionEnabled", value.termuxExecutionEnabled)
             .putBoolean("autoVerifyChanges", value.autoVerifyChanges)
+            .putBoolean("showToolActivity", value.showToolActivity)
             .putBoolean("animationsEnabled", value.animationsEnabled)
             .putString("language", value.language.name)
             .remove("endpoint")
@@ -188,6 +194,19 @@ class LocalStore(context: Context) {
                     outputTokens = message.optInt("outputTokens", 0),
                     toolCalls = message.optInt("toolCalls", 0),
                     elapsedMs = message.optLong("elapsedMs", 0L),
+                    toolTrace = (message.optJSONArray("toolTrace") ?: JSONArray()).let { traces ->
+                        (0 until traces.length()).map { traceIndex ->
+                            val trace = traces.getJSONObject(traceIndex)
+                            ToolTrace(
+                                id = trace.optString("id"),
+                                name = trace.optString("name"),
+                                arguments = trace.optString("arguments"),
+                                result = trace.optString("result"),
+                                state = runCatching { ToolTraceState.valueOf(trace.optString("state")) }.getOrDefault(ToolTraceState.ERROR),
+                                elapsedMs = trace.optLong("elapsedMs")
+                            )
+                        }
+                    },
                     createdAt = message.optLong("createdAt", 0L)
                 )
             }
@@ -216,6 +235,16 @@ class LocalStore(context: Context) {
                     put("outputTokens", message.outputTokens)
                     put("toolCalls", message.toolCalls)
                     put("elapsedMs", message.elapsedMs)
+                    put("toolTrace", JSONArray().apply {
+                        message.toolTrace.forEach { trace -> put(JSONObject().apply {
+                            put("id", trace.id)
+                            put("name", trace.name)
+                            put("arguments", trace.arguments)
+                            put("result", trace.result)
+                            put("state", trace.state.name)
+                            put("elapsedMs", trace.elapsedMs)
+                        }) }
+                    })
                     put("createdAt", message.createdAt)
                 })
             }

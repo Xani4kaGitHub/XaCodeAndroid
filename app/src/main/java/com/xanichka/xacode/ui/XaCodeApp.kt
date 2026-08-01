@@ -73,7 +73,7 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
     var openModelSettings by rememberSaveable { mutableStateOf(false) }
     var showFiles by rememberSaveable { mutableStateOf(false) }
     var createBlankAfterRootSelection by rememberSaveable { mutableStateOf(false) }
-    var permissionCenter by rememberSaveable { mutableStateOf(!state.settings.permissionOnboardingDone) }
+    var permissionCenter by rememberSaveable { mutableStateOf(!state.settings.backgroundOnboardingDone) }
     fun persistFolder(uri: android.net.Uri) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }

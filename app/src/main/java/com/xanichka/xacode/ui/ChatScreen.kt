@@ -73,6 +73,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xanichka.xacode.model.ChatMessage
+import com.xanichka.xacode.model.ToolTrace
+import com.xanichka.xacode.model.ToolTraceState
 import com.xanichka.xacode.data.AgentProgress
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.model.MessageRole
@@ -155,8 +157,8 @@ fun ChatScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
-                    items(messages, key = { it.id }) { MessageItem(it, state.settings.language) }
-                    if (state.isSending) item { ThinkingIndicator(state.agentProgress) }
+                    items(messages, key = { it.id }) { MessageItem(it, state.settings.language, state.settings.showToolActivity) }
+                    if (state.isSending) item { ThinkingIndicator(state.agentProgress, state.settings.showToolActivity) }
                 }
     }
     Column(modifier.fillMaxSize()) {
@@ -390,7 +392,7 @@ private fun WelcomePanel(projectName: String?, language: com.xanichka.xacode.mod
 }
 
 @Composable
-private fun MessageItem(message: ChatMessage, language: com.xanichka.xacode.model.UiLanguage) {
+private fun MessageItem(message: ChatMessage, language: com.xanichka.xacode.model.UiLanguage, showToolActivity: Boolean) {
     val isUser = message.role == MessageRole.USER
     val clipboard = LocalClipboardManager.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
@@ -404,6 +406,7 @@ private fun MessageItem(message: ChatMessage, language: com.xanichka.xacode.mode
                 SelectionContainer {
                     if (isUser) Text(message.text, fontSize = 15.sp, lineHeight = 22.sp) else MarkdownText(message.text)
                 }
+                if (!isUser && showToolActivity && message.toolTrace.isNotEmpty()) ToolTracePanel(message.toolTrace, false)
                 if (message.context.isNotBlank()) Text(tr(language, "Файлы прикреплены", "Файли прикріплено", "Files attached"), Modifier.padding(top = 6.dp), color = XaBlue, fontSize = 11.sp)
                 if (!isUser) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }, contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) { Icon(PhIcons.Copy, null, Modifier.size(15.dp)); Spacer(Modifier.width(5.dp)); Text(tr(language, "Копировать", "Копіювати", "Copy"), fontSize = 11.sp) }
@@ -588,13 +591,53 @@ private fun CodeBlock(language: String, code: String) {
 }
 
 @Composable
-private fun ThinkingIndicator(progress: AgentProgress) {
+private fun ThinkingIndicator(progress: AgentProgress, showToolActivity: Boolean) {
+    Column {
     Row(verticalAlignment = Alignment.CenterVertically) {
         BrandLogo(30.dp); Spacer(Modifier.width(12.dp)); CircularProgressIndicator(Modifier.size(18.dp), color = XaBlue, strokeWidth = 2.dp); Spacer(Modifier.width(9.dp))
         Column {
             Text(if (progress.currentTool.isBlank()) "XaCode думает…" else "Работает: ${progress.currentTool}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             val details = buildList { if (progress.inputTokens + progress.outputTokens > 0) add("${progress.inputTokens + progress.outputTokens} токенов"); if (progress.toolCalls > 0) add("${progress.toolCalls} инструментов") }.joinToString(" · ")
             if (details.isNotBlank()) Text(details, color = XaBlue, fontSize = 10.sp)
+        }
+    }
+    if (showToolActivity && progress.toolTrace.isNotEmpty()) ToolTracePanel(progress.toolTrace, true)
+    }
+}
+
+@Composable
+private fun ToolTracePanel(traces: List<ToolTrace>, running: Boolean) {
+    var expanded by rememberSaveable { mutableStateOf(running) }
+    val failures = traces.count { it.state == ToolTraceState.ERROR }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(top = 9.dp).clickable { expanded = !expanded }.animateContentSize(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = .72f)
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (running) "●" else "✓", color = if (running) XaBlue else MaterialTheme.colorScheme.primary, fontSize = 11.sp)
+                Spacer(Modifier.width(7.dp))
+                Text("Журнал инструментов · ${traces.size}", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                if (failures > 0) Text("$failures ошибок", color = MaterialTheme.colorScheme.error, fontSize = 10.sp)
+                Spacer(Modifier.width(6.dp)); Text(if (expanded) "⌃" else "⌄", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            AnimatedVisibility(expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    traces.takeLast(20).forEachIndexed { index, trace ->
+                        Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.background.copy(alpha = .55f)) {
+                            Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                val status = when (trace.state) { ToolTraceState.RUNNING -> "выполняется"; ToolTraceState.SUCCESS -> "готово"; ToolTraceState.ERROR -> "ошибка" }
+                                Text("${index + 1}. ${trace.name} · $status", color = if (trace.state == ToolTraceState.ERROR) MaterialTheme.colorScheme.error else XaBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                SelectionContainer { Column {
+                                    if (trace.arguments.isNotBlank()) Text("АРГУМЕНТЫ\n${trace.arguments}", fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 15.sp)
+                                    if (trace.result.isNotBlank()) Text("РЕЗУЛЬТАТ\n${trace.result}", Modifier.padding(top = 4.dp), fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 15.sp)
+                                } }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -5,6 +5,8 @@ import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
+import com.xanichka.xacode.model.ToolTrace
+import com.xanichka.xacode.model.ToolTraceState
 import com.xanichka.xacode.model.presetFor
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,8 +14,8 @@ import java.net.HttpURLConnection
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
-data class AiResult(val text: String, val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0)
-data class AgentProgress(val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val currentTool: String = "")
+data class AiResult(val text: String, val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val toolTrace: List<ToolTrace> = emptyList())
+data class AgentProgress(val inputTokens: Int = 0, val outputTokens: Int = 0, val toolCalls: Int = 0, val elapsedMs: Long = 0, val currentTool: String = "", val toolTrace: List<ToolTrace> = emptyList())
 internal data class DsmlToolCall(val name: String, val arguments: String)
 
 class AiClient {
@@ -68,6 +70,7 @@ class AiClient {
         var totalInputTokens = 0
         var totalOutputTokens = 0
         var totalToolCalls = 0
+        val toolTrace = mutableListOf<ToolTrace>()
         var previousToolSignature = ""
         val bodyMessages = JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt))
         messages.forEach { message ->
@@ -110,11 +113,13 @@ class AiClient {
             }
         repeat(MAX_TOOL_ROUNDS) {
             currentCoroutineContext().ensureActive()
+            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val response = request(openAiEndpoint(profile.baseUrl), headers, payload)
             val root = JSONObject(response)
             val usage = root.optJSONObject("usage")
             totalInputTokens += usage?.optInt("prompt_tokens", 0) ?: 0
             totalOutputTokens += usage?.optInt("completion_tokens", 0) ?: 0
+            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val message = root.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val rawContent = message.optString("content")
             val nativeCalls = message.optJSONArray("tool_calls")
@@ -126,10 +131,10 @@ class AiClient {
                     .put("function", JSONObject().put("name", call.name).put("arguments", call.arguments))) }
             }
             if (tools == null || calls.length() == 0) {
-                return AiResult(sanitizeAssistantText(rawContent), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+                return AiResult(sanitizeAssistantText(rawContent), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolTrace.toList())
             }
+            if (totalToolCalls + calls.length() > MAX_TOOL_CALLS) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
             totalToolCalls += calls.length()
-            onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, calls.getJSONObject(0).getJSONObject("function").optString("name")))
             val cleanContent = sanitizeAssistantText(rawContent)
             bodyMessages.put(JSONObject().put("role", "assistant")
                 .put("content", if (cleanContent.isBlank()) JSONObject.NULL else cleanContent)
@@ -139,21 +144,24 @@ class AiClient {
                 val name = function.getString("name")
                 val arguments = function.optString("arguments", "{}")
                 val signature = "$name:$arguments"
+                val traceIndex = toolTrace.size
+                toolTrace += ToolTrace(name = name, arguments = traceValue(arguments))
+                onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, name, toolTrace.toList()))
+                val toolStartedAt = System.currentTimeMillis()
                 val result = if (signature == previousToolSignature) {
                     "ERROR [$name]: identical consecutive call skipped; use the previous result or change the arguments"
                 } else tools.execute(name, arguments)
+                toolTrace[traceIndex] = toolTrace[traceIndex].copy(
+                    result = traceValue(result),
+                    state = if (result.startsWith("ERROR")) ToolTraceState.ERROR else ToolTraceState.SUCCESS,
+                    elapsedMs = System.currentTimeMillis() - toolStartedAt
+                )
+                onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, name, toolTrace.toList()))
                 previousToolSignature = signature
                 bodyMessages.put(JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content", result))
             }
         }
-        payload.remove("tools"); payload.remove("tool_choice")
-        bodyMessages.put(JSONObject().put("role", "system").put("content", "Лимит вызовов инструментов исчерпан. Не вызывай инструменты снова: кратко подведи итог выполненного, укажи реальные результаты и что осталось."))
-        val finalRoot = JSONObject(request(openAiEndpoint(profile.baseUrl), headers, payload))
-        val finalUsage = finalRoot.optJSONObject("usage")
-        totalInputTokens += finalUsage?.optInt("prompt_tokens", 0) ?: 0
-        totalOutputTokens += finalUsage?.optInt("completion_tokens", 0) ?: 0
-        val finalText = sanitizeAssistantText(finalRoot.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty())
-        return AiResult(finalText.ifBlank { "Работа завершена. Откройте файлы проекта, чтобы проверить изменения." }, totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+        return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
     }
 
     private suspend fun completeAnthropic(
@@ -168,6 +176,7 @@ class AiClient {
         var totalInputTokens = 0
         var totalOutputTokens = 0
         var totalToolCalls = 0
+        val toolTrace = mutableListOf<ToolTrace>()
         val bodyMessages = JSONArray()
         messages.forEach { message ->
             bodyMessages.put(JSONObject().apply {
@@ -196,30 +205,35 @@ class AiClient {
             }
         repeat(MAX_TOOL_ROUNDS) {
             currentCoroutineContext().ensureActive()
+            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val response = request(anthropicEndpoint(profile.baseUrl), headers, payload)
             val root = JSONObject(response)
             val usage = root.optJSONObject("usage")
             totalInputTokens += usage?.optInt("input_tokens", 0) ?: 0
             totalOutputTokens += usage?.optInt("output_tokens", 0) ?: 0
+            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val content = root.optJSONArray("content") ?: JSONArray()
             val toolUses = (0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "tool_use" } }
-            if (tools == null || toolUses.isEmpty()) return AiResult((0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim(), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+            if (tools == null || toolUses.isEmpty()) return AiResult((0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim(), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolTrace.toList())
+            if (totalToolCalls + toolUses.size > MAX_TOOL_CALLS) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
             totalToolCalls += toolUses.size
-            onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolUses.first().optString("name")))
             bodyMessages.put(JSONObject().put("role", "assistant").put("content", content))
             val results = JSONArray()
-            toolUses.forEach { use -> results.put(JSONObject().put("type", "tool_result").put("tool_use_id", use.getString("id")).put("content", tools.execute(use.getString("name"), use.optJSONObject("input")?.toString() ?: "{}"))) }
+            toolUses.forEach { use ->
+                val name = use.getString("name")
+                val arguments = use.optJSONObject("input")?.toString() ?: "{}"
+                val traceIndex = toolTrace.size
+                toolTrace += ToolTrace(name = name, arguments = traceValue(arguments))
+                onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, name, toolTrace.toList()))
+                val toolStartedAt = System.currentTimeMillis()
+                val result = tools.execute(name, arguments)
+                toolTrace[traceIndex] = toolTrace[traceIndex].copy(result = traceValue(result), state = if (result.startsWith("ERROR")) ToolTraceState.ERROR else ToolTraceState.SUCCESS, elapsedMs = System.currentTimeMillis() - toolStartedAt)
+                onProgress(AgentProgress(totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, name, toolTrace.toList()))
+                results.put(JSONObject().put("type", "tool_result").put("tool_use_id", use.getString("id")).put("content", result))
+            }
             bodyMessages.put(JSONObject().put("role", "user").put("content", results))
         }
-        payload.remove("tools")
-        bodyMessages.put(JSONObject().put("role", "user").put("content", "Лимит вызовов инструментов исчерпан. Не вызывай инструменты снова: кратко подведи итог выполненного, укажи реальные результаты и что осталось."))
-        val finalRoot = JSONObject(request(anthropicEndpoint(profile.baseUrl), headers, payload))
-        val finalUsage = finalRoot.optJSONObject("usage")
-        totalInputTokens += finalUsage?.optInt("input_tokens", 0) ?: 0
-        totalOutputTokens += finalUsage?.optInt("output_tokens", 0) ?: 0
-        val finalContent = finalRoot.optJSONArray("content") ?: JSONArray()
-        val finalText = (0 until finalContent.length()).mapNotNull { index -> finalContent.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim()
-        return AiResult(finalText.ifBlank { "Работа завершена. Откройте файлы проекта, чтобы проверить изменения." }, totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt)
+        return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
     }
 
     private suspend fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
@@ -266,18 +280,47 @@ class AiClient {
         profile.provider == ProviderType.ANTHROPIC ||
             (profile.provider == ProviderType.AGENTROUTER && profile.model.contains("claude", ignoreCase = true))
 
-    private companion object { const val MAX_TOOL_ROUNDS = 16 }
+    private fun budgetStop(startedAt: Long, input: Int, output: Int, calls: Int, trace: List<ToolTrace>): AiResult? = when {
+        input + output >= MAX_TOTAL_TOKENS -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит токенов")
+        System.currentTimeMillis() - startedAt >= MAX_AGENT_ELAPSED_MS -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит времени")
+        calls >= MAX_TOOL_CALLS -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит инструментов")
+        else -> null
+    }
+
+    private fun budgetResult(startedAt: Long, input: Int, output: Int, calls: Int, trace: List<ToolTrace>, reason: String) = AiResult(
+        text = "XaCode безопасно остановил агента: $reason. Уже выполненные действия сохранены в журнале инструментов.",
+        inputTokens = input,
+        outputTokens = output,
+        toolCalls = calls,
+        elapsedMs = System.currentTimeMillis() - startedAt,
+        toolTrace = trace.toList()
+    )
+
+    private companion object {
+        const val MAX_TOOL_ROUNDS = 10
+        const val MAX_TOOL_CALLS = 20
+        const val MAX_TOTAL_TOKENS = 100_000
+        const val MAX_AGENT_ELAPSED_MS = 8 * 60 * 1_000L
+    }
+}
+
+private fun traceValue(value: String): String {
+    val redacted = value.replace(
+        Regex("""(?i)(api[_-]?key|authorization|password|token)([\"']?\s*[:=]\s*[\"']?)[^\"'\s,}]+"""),
+        "\$1\$2***"
+    )
+    return if (redacted.length <= 4_000) redacted else redacted.take(4_000) + "\n… обрезано XaCode"
 }
 
 internal fun parseDsmlToolCalls(content: String): List<DsmlToolCall> {
     if (!content.contains("DSML", ignoreCase = true)) return emptyList()
     val normalized = content.replace('｜', '|')
     val invoke = Regex(
-        """<\s*\|\s*DSML\s*\|\s*invoke\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)<\s*/\s*\|\s*DSML\s*\|\s*invoke\s*>""",
+        """<\s*\|+\s*DSML\s*\|+\s*invoke\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)<\s*/\s*\|+\s*DSML\s*\|+\s*invoke\s*>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     val parameter = Regex(
-        """<\s*\|\s*DSML\s*\|\s*parameter\s+([^>]*)>(.*?)<\s*/\s*\|\s*DSML\s*\|\s*parameter\s*>""",
+        """<\s*\|+\s*DSML\s*\|+\s*parameter\s+([^>]*)>(.*?)<\s*/\s*\|+\s*DSML\s*\|+\s*parameter\s*>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
     val nameAttribute = Regex("""name\s*=\s*[\"']([^\"']+)[\"']""", RegexOption.IGNORE_CASE)
@@ -300,10 +343,10 @@ internal fun sanitizeAssistantText(content: String): String {
     if (!content.contains("DSML", ignoreCase = true)) return content.trim()
     val normalized = content.replace('｜', '|')
     val withoutCalls = normalized.replace(
-        Regex("""<\s*\|\s*DSML\s*\|\s*tool_calls\s*>.*?<\s*/\s*\|\s*DSML\s*\|\s*tool_calls\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)),
+        Regex("""<\s*\|+\s*DSML\s*\|+\s*tool_calls\s*>.*?<\s*/\s*\|+\s*DSML\s*\|+\s*tool_calls\s*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)),
         ""
     )
-    return withoutCalls.replace(Regex("""<\s*/?\s*\|\s*DSML\s*\|[^>]*>""", RegexOption.IGNORE_CASE), "").trim()
+    return withoutCalls.replace(Regex("""<\s*/?\s*\|+\s*DSML\s*\|+[^>]*>""", RegexOption.IGNORE_CASE), "").trim()
 }
 
 private fun decodeDsml(value: String): String = value

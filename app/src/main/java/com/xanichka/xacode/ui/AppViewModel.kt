@@ -11,6 +11,7 @@ import com.xanichka.xacode.data.LocalStore
 import com.xanichka.xacode.data.WorkspaceRepository
 import com.xanichka.xacode.data.PythonRuntime
 import com.xanichka.xacode.data.TermuxBridge
+import com.xanichka.xacode.data.AgentForegroundService
 import com.xanichka.xacode.model.AppSettings
 import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.Conversation
@@ -163,7 +164,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun finishPermissionOnboarding() = saveSettings(_state.value.settings.copy(permissionOnboardingDone = true))
+    fun finishPermissionOnboarding() = saveSettings(_state.value.settings.copy(permissionOnboardingDone = true, backgroundOnboardingDone = true))
 
     fun selectProfile(id: String) {
         var settingsToSave: AppSettings? = null
@@ -248,6 +249,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val id = conversationId ?: return
         runningJobs.remove(id)?.cancel()
         _state.update { it.copy(runningConversations = it.runningConversations - id) }
+        if (runningJobs.isEmpty()) AgentForegroundService.stop(getApplication())
     }
 
     fun send(text: String, context: String = ""): Boolean {
@@ -311,13 +313,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         _state.update { it.copy(runningConversations = it.runningConversations + (conversation.id to progress)) }
                     }
                 }
-            }.onSuccess { answer -> appendAssistant(conversation.id, answer) }
+            }.onSuccess { answer ->
+                appendAssistant(conversation.id, answer)
+                AgentForegroundService.notifyFinished(getApplication(), conversation.title, true)
+            }
                 .onFailure { throwable ->
+                    if (throwable !is CancellationException) AgentForegroundService.notifyFinished(getApplication(), conversation.title, false)
                     _state.update { current -> current.copy(runningConversations = current.runningConversations - conversation.id, error = if (throwable is CancellationException) current.error else throwable.message ?: "Не удалось получить ответ") }
                 }
             runningJobs.remove(conversation.id)
+            if (runningJobs.isEmpty()) AgentForegroundService.stop(getApplication())
         }
         runningJobs[conversation.id] = job
+        runCatching { AgentForegroundService.start(getApplication(), conversation.title) }
         job.start()
         return true
     }
@@ -334,7 +342,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             inputTokens = answer.inputTokens,
                             outputTokens = answer.outputTokens,
                             toolCalls = answer.toolCalls,
-                            elapsedMs = answer.elapsedMs
+                            elapsedMs = answer.elapsedMs,
+                            toolTrace = answer.toolTrace
                         ),
                         updatedAt = System.currentTimeMillis()
                     )
