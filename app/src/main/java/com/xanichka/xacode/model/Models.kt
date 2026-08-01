@@ -24,17 +24,31 @@ data class ProviderPreset(
 )
 
 val providerPresets = listOf(
-    ProviderPreset(ProviderType.DEEPSEEK, "DeepSeek", "https://api.deepseek.com", "deepseek-chat", listOf("deepseek-chat", "deepseek-reasoner"), 128_000),
-    ProviderPreset(ProviderType.OPENAI, "OpenAI", "https://api.openai.com/v1", "gpt-4.1", listOf("gpt-4.1", "gpt-4.1-mini", "o3"), 128_000),
-    ProviderPreset(ProviderType.ANTHROPIC, "Anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5", listOf("claude-sonnet-4-5", "claude-opus-4-1"), 200_000, anthropicFormat = true),
-    ProviderPreset(ProviderType.GOOGLE, "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-pro", listOf("gemini-2.5-pro", "gemini-2.5-flash"), 1_000_000),
-    ProviderPreset(ProviderType.OPENROUTER, "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4.1", listOf("openai/gpt-4.1", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro"), 128_000),
+    ProviderPreset(ProviderType.DEEPSEEK, "DeepSeek", "https://api.deepseek.com", "deepseek-v4-flash", listOf("deepseek-v4-flash", "deepseek-v4-pro"), 1_000_000),
+    ProviderPreset(ProviderType.OPENAI, "OpenAI", "https://api.openai.com/v1", "gpt-5.1", listOf("gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"), 400_000),
+    ProviderPreset(ProviderType.ANTHROPIC, "Anthropic", "https://api.anthropic.com/v1/messages", "claude-sonnet-5", listOf("claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"), 1_000_000, anthropicFormat = true),
+    ProviderPreset(ProviderType.GOOGLE, "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-3.6-flash", listOf("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"), 1_000_000),
+    ProviderPreset(ProviderType.OPENROUTER, "OpenRouter", "https://openrouter.ai/api/v1", "deepseek/deepseek-v4-flash", listOf("deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", "openai/gpt-5.1", "anthropic/claude-sonnet-5", "google/gemini-3.6-flash"), 1_000_000),
     ProviderPreset(ProviderType.AGENTROUTER, "AgentRouter", "https://agentrouter.org/v1", "claude-3-5-sonnet-20241022", listOf("claude-3-5-sonnet-20241022", "gpt-4o", "deepseek-v3.2"), 200_000),
     ProviderPreset(ProviderType.OLLAMA, "Ollama", "http://127.0.0.1:11434/v1", "qwen3-coder", listOf("qwen3-coder", "llama3.3", "gemma3"), 32_000, apiKeyOptional = true),
     ProviderPreset(ProviderType.CUSTOM, "Свой API", "", "", emptyList(), 32_000, apiKeyOptional = true)
 )
 
 fun presetFor(type: ProviderType) = providerPresets.first { it.type == type }
+
+/** Keeps saved profiles working when a provider retires an old public model id. */
+fun currentModelId(provider: ProviderType, savedModel: String): String = when {
+    provider == ProviderType.DEEPSEEK && savedModel in setOf("deepseek-chat", "deepseek-reasoner") -> "deepseek-v4-flash"
+    savedModel.isBlank() && provider != ProviderType.CUSTOM -> presetFor(provider).defaultModel
+    else -> savedModel
+}
+
+fun currentContextTokens(provider: ProviderType, savedModel: String, savedTokens: Int): Int =
+    if (
+        provider == ProviderType.DEEPSEEK &&
+        savedModel in setOf("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro") &&
+        savedTokens == 128_000
+    ) 1_000_000 else savedTokens.coerceAtLeast(1_024)
 
 @Immutable
 data class ModelProfile(
@@ -43,8 +57,8 @@ data class ModelProfile(
     val provider: ProviderType = ProviderType.DEEPSEEK,
     val apiKey: String = "",
     val baseUrl: String = "https://api.deepseek.com",
-    val model: String = "deepseek-chat",
-    val maxContextTokens: Int = 128_000,
+    val model: String = "deepseek-v4-flash",
+    val maxContextTokens: Int = 1_000_000,
     val showReasoning: Boolean = false,
     val reasoningEffort: String = "high"
 )

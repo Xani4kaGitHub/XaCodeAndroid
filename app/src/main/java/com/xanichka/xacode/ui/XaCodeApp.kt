@@ -164,11 +164,24 @@ fun XaCodeApp(viewModel: AppViewModel = viewModel()) {
         )
     }
     state.error?.let { message ->
+        val needsProject = message.contains("проект", ignoreCase = true) ||
+            message.contains("проєкт", ignoreCase = true) ||
+            message.contains("project", ignoreCase = true)
         AlertDialog(
             onDismissRequest = viewModel::dismissError,
             title = { Text(tr(state.settings.language, "Не получилось отправить", "Не вдалося надіслати", "Could not send")) }, text = { Text(message) },
             confirmButton = { TextButton(onClick = viewModel::dismissError) { Text(tr(state.settings.language, "Понятно", "Зрозуміло", "OK")) } },
-            dismissButton = { TextButton(onClick = { viewModel.dismissError(); showSettings = true }) { Text(tr(state.settings.language, "Настроить модель", "Налаштувати модель", "Configure model")) } }
+            dismissButton = {
+                TextButton(onClick = {
+                    viewModel.dismissError()
+                    if (needsProject) scope.launch { drawerState.open() } else showSettings = true
+                }) {
+                    Text(
+                        if (needsProject) tr(state.settings.language, "Открыть проекты", "Відкрити проєкти", "Open projects")
+                        else tr(state.settings.language, "Настроить модель", "Налаштувати модель", "Configure model")
+                    )
+                }
+            }
         )
     }
 }

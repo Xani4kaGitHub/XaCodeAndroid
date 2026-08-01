@@ -5,6 +5,7 @@ import com.xanichka.xacode.model.ChatMessage
 import com.xanichka.xacode.model.MessageRole
 import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
+import com.xanichka.xacode.model.presetFor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -18,6 +19,9 @@ class AiClient {
     suspend fun complete(settings: AppSettings, profile: ModelProfile, messages: List<ChatMessage>, tools: AgentToolExecutor? = null, onProgress: (AgentProgress) -> Unit = {}): AiResult {
         NetworkSecurity.apiUrl(profile.baseUrl)
         require(profile.model.isNotBlank() || profile.model == "-") { "Укажите модель в настройках" }
+        require(presetFor(profile.provider).apiKeyOptional || profile.apiKey.isNotBlank()) {
+            "API-ключ не найден. Откройте настройки модели, добавьте ключ и нажмите «Проверить»."
+        }
         val systemPrompt = buildString {
             append("Ты XaCode — самостоятельный AI-агент для разработки и обычных вопросов. ")
             append("Сам определи намерение пользователя: ответить, написать код, спроектировать приложение или создать бота. ")
@@ -69,12 +73,19 @@ class AiClient {
             })
         }
         val payload = JSONObject().put("messages", bodyMessages)
-        if (tools != null) payload.put("tools", tools.definitions).put("tool_choice", "auto")
+        if (tools != null) {
+            payload.put("tools", tools.definitions)
+            // DeepSeek V4 thinking mode supports tools but rejects tool_choice.
+            if (profile.provider != ProviderType.DEEPSEEK) payload.put("tool_choice", "auto")
+        }
         if (profile.model != "-") payload.put("model", profile.model)
         if (settings.temperatureEnabled) payload.put("temperature", settings.temperature.toDouble())
-        if (profile.provider == ProviderType.DEEPSEEK && profile.reasoningEffort != "disabled") {
-            payload.put("thinking", JSONObject().put("type", "enabled").put("reasoning_effort", profile.reasoningEffort))
-            payload.put("reasoning_effort", profile.reasoningEffort)
+        if (profile.provider == ProviderType.DEEPSEEK) {
+            val thinkingEnabled = profile.reasoningEffort != "disabled"
+            payload.put("thinking", JSONObject().put("type", if (thinkingEnabled) "enabled" else "disabled"))
+            if (thinkingEnabled) {
+                payload.put("reasoning_effort", if (profile.reasoningEffort in setOf("max", "xhigh")) "max" else "high")
+            }
         }
 
         val headers = buildMap {

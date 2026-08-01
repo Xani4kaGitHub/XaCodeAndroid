@@ -9,6 +9,8 @@ import com.xanichka.xacode.model.ModelProfile
 import com.xanichka.xacode.model.ProviderType
 import com.xanichka.xacode.model.ProjectWorkspace
 import com.xanichka.xacode.model.UiLanguage
+import com.xanichka.xacode.model.currentContextTokens
+import com.xanichka.xacode.model.currentModelId
 import com.xanichka.xacode.model.presetFor
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,15 +27,18 @@ class LocalStore(context: Context) {
             (0 until array.length()).map { index ->
                 val item = array.getJSONObject(index)
                 val id = item.getString("id")
+                val provider = runCatching { ProviderType.valueOf(item.optString("provider")) }
+                    .getOrDefault(ProviderType.CUSTOM)
+                val savedModel = item.optString("model")
+                val savedContext = item.optInt("maxContextTokens", presetFor(provider).defaultContextTokens)
                 ModelProfile(
                     id = id,
                     name = item.optString("name", "Модель"),
-                    provider = runCatching { ProviderType.valueOf(item.optString("provider")) }
-                        .getOrDefault(ProviderType.CUSTOM),
+                    provider = provider,
                     apiKey = secrets.readApiKey(id),
                     baseUrl = item.optString("baseUrl"),
-                    model = item.optString("model"),
-                    maxContextTokens = item.optInt("maxContextTokens", presetFor(runCatching { ProviderType.valueOf(item.optString("provider")) }.getOrDefault(ProviderType.CUSTOM)).defaultContextTokens).coerceAtLeast(1_024),
+                    model = currentModelId(provider, savedModel),
+                    maxContextTokens = currentContextTokens(provider, savedModel, savedContext),
                     showReasoning = item.optBoolean("showReasoning", false),
                     reasoningEffort = item.optString("reasoningEffort", "high")
                 )
@@ -48,7 +53,8 @@ class LocalStore(context: Context) {
                     provider = if (endpoint != null) ProviderType.CUSTOM else ProviderType.DEEPSEEK,
                     apiKey = secrets.readApiKey("deepseek-default"),
                     baseUrl = endpoint ?: "https://api.deepseek.com",
-                    model = model ?: "deepseek-chat"
+                    model = currentModelId(ProviderType.DEEPSEEK, model ?: "deepseek-v4-flash"),
+                    maxContextTokens = 1_000_000
                 )
             )
         }
