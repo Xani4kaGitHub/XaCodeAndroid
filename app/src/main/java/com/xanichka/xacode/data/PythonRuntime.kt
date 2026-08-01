@@ -1,6 +1,7 @@
 package com.xanichka.xacode.data
 
 import android.content.Context
+import android.util.Log
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import org.json.JSONArray
@@ -21,7 +22,7 @@ class PythonRuntime(private val context: Context, private val workspace: Workspa
             val json = Python.getInstance().getModule("xacode_runner")
                 .callAttr("run_file", runRoot.absolutePath, relativePath, arguments.toString())
                 .toJava(String::class.java)
-            workspace.syncProject(projectUri, runRoot)
+            syncProjectWithRetry(projectUri, runRoot)
             val result = JSONObject(json)
             buildString {
                 append(if (result.optBoolean("ok")) "Python finished successfully" else "Python failed")
@@ -32,4 +33,21 @@ class PythonRuntime(private val context: Context, private val workspace: Workspa
             runRoot.deleteRecursively()
         }
     }
+
+    private fun syncProjectWithRetry(projectUri: String, runRoot: File) {
+        var lastFailure: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                workspace.syncProject(projectUri, runRoot)
+                return
+            } catch (failure: Throwable) {
+                lastFailure = failure
+                Log.w(TAG, "Project sync failed on attempt ${attempt + 1}/3", failure)
+                if (attempt < 2) Thread.sleep(250L * (attempt + 1))
+            }
+        }
+        throw lastFailure ?: IllegalStateException("Project sync failed")
+    }
+
+    private companion object { const val TAG = "XaCodePython" }
 }

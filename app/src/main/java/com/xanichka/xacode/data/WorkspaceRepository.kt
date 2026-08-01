@@ -7,6 +7,24 @@ import androidx.documentfile.provider.DocumentFile
 import org.json.JSONObject
 import java.io.File
 
+internal object WorkspacePathPolicy {
+    fun segments(path: String, allowEmpty: Boolean = false): List<String> {
+        require(path.length <= 1024 && '\u0000' !in path && !path.startsWith('/') && !Regex("^[A-Za-z]:").containsMatchIn(path)) {
+            "Недопустимый путь"
+        }
+        val segments = path.replace('\\', '/').split('/').filter { it.isNotBlank() }
+        require(allowEmpty || segments.isNotEmpty()) { "Недопустимый путь" }
+        segments.forEach(::validateName)
+        return segments
+    }
+
+    fun validateName(name: String) {
+        require(name.isNotBlank() && name != "." && name != ".." && name.length <= 255 &&
+            '/' !in name && '\\' !in name && name.none { it.code < 32 }
+        ) { "Недопустимое название" }
+    }
+}
+
 data class WorkspaceEntry(
     val name: String,
     val uri: String,
@@ -314,20 +332,10 @@ class WorkspaceRepository(private val context: Context) {
     }
 
     private fun safeSegments(path: String, allowEmpty: Boolean = false): List<String> {
-        require(path.length <= 1024 && '\u0000' !in path && !path.startsWith('/') && !Regex("^[A-Za-z]:").containsMatchIn(path)) {
-            "Недопустимый путь"
-        }
-        val segments = path.replace('\\', '/').split('/').filter { it.isNotBlank() }
-        require(allowEmpty || segments.isNotEmpty()) { "Недопустимый путь" }
-        segments.forEach(::validateName)
-        return segments
+        return WorkspacePathPolicy.segments(path, allowEmpty)
     }
 
-    private fun validateName(name: String) {
-        require(name.isNotBlank() && name != "." && name != ".." && name.length <= 255 &&
-            '/' !in name && '\\' !in name && name.none { it.code < 32 }
-        ) { "Недопустимое название" }
-    }
+    private fun validateName(name: String) = WorkspacePathPolicy.validateName(name)
 
     private companion object {
         const val MAX_TEXT_BYTES = 2 * 1024 * 1024
