@@ -488,6 +488,22 @@ private fun ToolsPage(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val termuxProjectUri = settings.projects.firstOrNull()?.treeUri
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { SettingsSection(tr(settings.language, "ЛИМИТЫ АГЕНТА", "ЛІМІТИ АГЕНТА", "AGENT LIMITS")) {
+            ToggleRow(
+                tr(settings.language, "Ограничивать работу агента", "Обмежувати роботу агента", "Limit agent execution"),
+                tr(settings.language, "По умолчанию выключено — агент работает до завершения или ручной отмены", "Типово вимкнено — агент працює до завершення або ручного скасування", "Off by default — the agent runs until completion or manual cancellation"),
+                settings.agentLimitsEnabled
+            ) { onChange(settings.copy(agentLimitsEnabled = it)) }
+            if (settings.agentLimitsEnabled) {
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LimitNumberField(tr(settings.language, "Токены за один запуск", "Токени за один запуск", "Tokens per run"), settings.agentMaxTokens, 1_000, 2_000_000) { onChange(settings.copy(agentMaxTokens = it)) }
+                    LimitNumberField(tr(settings.language, "Вызовы инструментов", "Виклики інструментів", "Tool calls"), settings.agentMaxToolCalls, 1, 1_000) { onChange(settings.copy(agentMaxToolCalls = it)) }
+                    LimitNumberField(tr(settings.language, "Раунды агента", "Раунди агента", "Agent rounds"), settings.agentMaxRounds, 1, 1_000) { onChange(settings.copy(agentMaxRounds = it)) }
+                    LimitNumberField(tr(settings.language, "Время, минут", "Час, хвилин", "Time, minutes"), settings.agentMaxMinutes, 1, 1_440) { onChange(settings.copy(agentMaxMinutes = it)) }
+                }
+            }
+        } }
         item {
             Text("По подходу XaCode Desktop модель получает только включённые инструменты. На Android они работают строго внутри папки проекта.", color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
         }
@@ -659,6 +675,25 @@ private fun AppearancePage(settings: AppSettings, onChange: (AppSettings) -> Uni
         }
         item { SettingsSection(tr(settings.language, "ИНТЕРФЕЙС", "ІНТЕРФЕЙС", "INTERFACE")) { ToggleRow(tr(settings.language, "Плавные анимации", "Плавні анімації", "Smooth animations"), tr(settings.language, "Переходы экранов и появление элементов", "Переходи екранів і поява елементів", "Screen transitions and element appearance"), settings.animationsEnabled) { onChange(settings.copy(animationsEnabled = it)) } } }
     }
+}
+
+@Composable
+private fun LimitNumberField(label: String, value: Int, min: Int, max: Int, onValueChange: (Int) -> Unit) {
+    var text by rememberSaveable(value) { mutableStateOf(value.toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { candidate ->
+            val filtered = candidate.filter(Char::isDigit).take(7)
+            text = filtered
+            filtered.toIntOrNull()?.coerceIn(min, max)?.let(onValueChange)
+        },
+        label = { Text(label) },
+        supportingText = { Text("$min — $max") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp)
+    )
 }
 
 @Composable

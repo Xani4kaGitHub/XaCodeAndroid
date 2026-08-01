@@ -92,6 +92,11 @@ data class AppSettings(
     val termuxExecutionEnabled: Boolean = false,
     val autoVerifyChanges: Boolean = true,
     val showToolActivity: Boolean = true,
+    val agentLimitsEnabled: Boolean = false,
+    val agentMaxTokens: Int = 100_000,
+    val agentMaxToolCalls: Int = 20,
+    val agentMaxRounds: Int = 10,
+    val agentMaxMinutes: Int = 8,
     val animationsEnabled: Boolean = true,
     val language: UiLanguage = UiLanguage.RUSSIAN
 ) {

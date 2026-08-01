@@ -100,6 +100,11 @@ class LocalStore(context: Context) {
             termuxExecutionEnabled = preferences.getBoolean("termuxExecutionEnabled", false),
             autoVerifyChanges = preferences.getBoolean("autoVerifyChanges", true),
             showToolActivity = preferences.getBoolean("showToolActivity", true),
+            agentLimitsEnabled = preferences.getBoolean("agentLimitsEnabled", false),
+            agentMaxTokens = preferences.getInt("agentMaxTokens", 100_000).coerceIn(1_000, 2_000_000),
+            agentMaxToolCalls = preferences.getInt("agentMaxToolCalls", 20).coerceIn(1, 1_000),
+            agentMaxRounds = preferences.getInt("agentMaxRounds", 10).coerceIn(1, 1_000),
+            agentMaxMinutes = preferences.getInt("agentMaxMinutes", 8).coerceIn(1, 1_440),
             animationsEnabled = preferences.getBoolean("animationsEnabled", true),
             language = runCatching {
                 UiLanguage.valueOf(preferences.getString("language", UiLanguage.RUSSIAN.name).orEmpty())
@@ -151,6 +156,11 @@ class LocalStore(context: Context) {
             .putBoolean("termuxExecutionEnabled", value.termuxExecutionEnabled)
             .putBoolean("autoVerifyChanges", value.autoVerifyChanges)
             .putBoolean("showToolActivity", value.showToolActivity)
+            .putBoolean("agentLimitsEnabled", value.agentLimitsEnabled)
+            .putInt("agentMaxTokens", value.agentMaxTokens.coerceIn(1_000, 2_000_000))
+            .putInt("agentMaxToolCalls", value.agentMaxToolCalls.coerceIn(1, 1_000))
+            .putInt("agentMaxRounds", value.agentMaxRounds.coerceIn(1, 1_000))
+            .putInt("agentMaxMinutes", value.agentMaxMinutes.coerceIn(1, 1_440))
             .putBoolean("animationsEnabled", value.animationsEnabled)
             .putString("language", value.language.name)
             .remove("endpoint")

@@ -111,15 +111,18 @@ class AiClient {
                     else -> Unit
                 }
             }
-        repeat(MAX_TOOL_ROUNDS) {
+        var round = 0
+        while (true) {
+            if (settings.agentLimitsEnabled && round >= settings.agentMaxRounds) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
+            round++
             currentCoroutineContext().ensureActive()
-            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
+            budgetStop(settings, startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val response = request(openAiEndpoint(profile.baseUrl), headers, payload)
             val root = JSONObject(response)
             val usage = root.optJSONObject("usage")
             totalInputTokens += usage?.optInt("prompt_tokens", 0) ?: 0
             totalOutputTokens += usage?.optInt("completion_tokens", 0) ?: 0
-            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
+            budgetStop(settings, startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val message = root.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val rawContent = message.optString("content")
             val nativeCalls = message.optJSONArray("tool_calls")
@@ -133,7 +136,7 @@ class AiClient {
             if (tools == null || calls.length() == 0) {
                 return AiResult(sanitizeAssistantText(rawContent), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolTrace.toList())
             }
-            if (totalToolCalls + calls.length() > MAX_TOOL_CALLS) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
+            if (settings.agentLimitsEnabled && totalToolCalls + calls.length() > settings.agentMaxToolCalls) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
             totalToolCalls += calls.length()
             val cleanContent = sanitizeAssistantText(rawContent)
             bodyMessages.put(JSONObject().put("role", "assistant")
@@ -161,7 +164,6 @@ class AiClient {
                 bodyMessages.put(JSONObject().put("role", "tool").put("tool_call_id", call.getString("id")).put("content", result))
             }
         }
-        return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
     }
 
     private suspend fun completeAnthropic(
@@ -203,19 +205,22 @@ class AiClient {
                     put("Version", "0.101.0")
                 }
             }
-        repeat(MAX_TOOL_ROUNDS) {
+        var round = 0
+        while (true) {
+            if (settings.agentLimitsEnabled && round >= settings.agentMaxRounds) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
+            round++
             currentCoroutineContext().ensureActive()
-            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
+            budgetStop(settings, startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val response = request(anthropicEndpoint(profile.baseUrl), headers, payload)
             val root = JSONObject(response)
             val usage = root.optJSONObject("usage")
             totalInputTokens += usage?.optInt("input_tokens", 0) ?: 0
             totalOutputTokens += usage?.optInt("output_tokens", 0) ?: 0
-            budgetStop(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
+            budgetStop(settings, startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace)?.let { return it }
             val content = root.optJSONArray("content") ?: JSONArray()
             val toolUses = (0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "tool_use" } }
             if (tools == null || toolUses.isEmpty()) return AiResult((0 until content.length()).mapNotNull { index -> content.optJSONObject(index)?.takeIf { it.optString("type") == "text" }?.optString("text") }.joinToString("").trim(), totalInputTokens, totalOutputTokens, totalToolCalls, System.currentTimeMillis() - startedAt, toolTrace.toList())
-            if (totalToolCalls + toolUses.size > MAX_TOOL_CALLS) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
+            if (settings.agentLimitsEnabled && totalToolCalls + toolUses.size > settings.agentMaxToolCalls) return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит инструментов")
             totalToolCalls += toolUses.size
             bodyMessages.put(JSONObject().put("role", "assistant").put("content", content))
             val results = JSONArray()
@@ -233,7 +238,6 @@ class AiClient {
             }
             bodyMessages.put(JSONObject().put("role", "user").put("content", results))
         }
-        return budgetResult(startedAt, totalInputTokens, totalOutputTokens, totalToolCalls, toolTrace, "достигнут лимит раундов")
     }
 
     private suspend fun request(url: String, headers: Map<String, String>, payload: JSONObject): String {
@@ -280,10 +284,11 @@ class AiClient {
         profile.provider == ProviderType.ANTHROPIC ||
             (profile.provider == ProviderType.AGENTROUTER && profile.model.contains("claude", ignoreCase = true))
 
-    private fun budgetStop(startedAt: Long, input: Int, output: Int, calls: Int, trace: List<ToolTrace>): AiResult? = when {
-        input + output >= MAX_TOTAL_TOKENS -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит токенов")
-        System.currentTimeMillis() - startedAt >= MAX_AGENT_ELAPSED_MS -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит времени")
-        calls >= MAX_TOOL_CALLS -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит инструментов")
+    private fun budgetStop(settings: AppSettings, startedAt: Long, input: Int, output: Int, calls: Int, trace: List<ToolTrace>): AiResult? = when {
+        !settings.agentLimitsEnabled -> null
+        input + output >= settings.agentMaxTokens -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит токенов")
+        System.currentTimeMillis() - startedAt >= settings.agentMaxMinutes * 60_000L -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит времени")
+        calls >= settings.agentMaxToolCalls -> budgetResult(startedAt, input, output, calls, trace, "достигнут лимит инструментов")
         else -> null
     }
 
@@ -296,12 +301,6 @@ class AiClient {
         toolTrace = trace.toList()
     )
 
-    private companion object {
-        const val MAX_TOOL_ROUNDS = 10
-        const val MAX_TOOL_CALLS = 20
-        const val MAX_TOTAL_TOKENS = 100_000
-        const val MAX_AGENT_ELAPSED_MS = 8 * 60 * 1_000L
-    }
 }
 
 private fun traceValue(value: String): String {

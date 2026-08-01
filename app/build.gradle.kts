@@ -13,8 +13,8 @@ android {
         applicationId = "com.xanichka.xacode"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.10.5"
+        versionCode = 17
+        versionName = "0.10.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
